@@ -2,3 +2,4 @@ ccxt
 pandas
 google-genai
 supabase
+streamlit
