@@ -39,7 +39,12 @@ if col_stop.button("⏹️ Detener Bot", use_container_width=True):
     st.rerun()
 
 st.sidebar.markdown("---")
-symbol = st.sidebar.selectbox("Par a analizar", ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
+symbol = st.sidebar.selectbox("Par a analizar", [
+    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
+    "ADA/USDT", "AVAX/USDT", "DOGE/USDT", "DOT/USDT", "LINK/USDT",
+    "MATIC/USDT", "NEAR/USDT", "LTC/USDT", "SUI/USDT", "APT/USDT",
+    "OP/USDT", "ARBV/USDT", "INJ/USDT"
+])
 risk_pct = st.sidebar.slider("Riesgo por Operación (%)", 0.5, 5.0, float(config.RISK_PER_TRADE_PCT), step=0.5)
 
 config.SYMBOL = symbol
