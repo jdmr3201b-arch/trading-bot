@@ -57,7 +57,7 @@ kpi4.metric("Operaciones Totales", len(engine.trade_history))
 st.markdown("---")
 st.subheader(f"📊 Mercado en Vivo: {config.SYMBOL}")
 
-df_market = engine.fetch_market_data()
+df_market = engine.fetch_market_data(config.SYMBOL)
 if not df_market.empty:
     chart_data = df_market.set_index('timestamp')[['close', 'EMA_200']]
     st.line_chart(chart_data)
