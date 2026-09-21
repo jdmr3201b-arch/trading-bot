@@ -19,7 +19,7 @@ class AutoTradingEngine:
         self.trade_history = []  # Historial cerrado
         self.logs = []           # Bitácora
         
-        self.exchange = ccxt.binance({
+        self.exchange = ccxt.kraken({
             'apiKey': getattr(config, 'EXCHANGE_API_KEY', ''),
             'secret': getattr(config, 'EXCHANGE_SECRET', ''),
             'enableRateLimit': True,
