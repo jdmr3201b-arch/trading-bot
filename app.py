@@ -78,6 +78,6 @@ with col_right:
 
 # Bucle de ejecución
 if st.session_state.is_running:
-    engine.run_cycle()
+    engine.run_cycle_for_symbol(selected_symbol)
     time.sleep(5)
     st.rerun()
