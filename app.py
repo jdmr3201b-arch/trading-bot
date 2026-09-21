@@ -78,6 +78,17 @@ with col_right:
 
 # Bucle de ejecución
 if st.session_state.is_running:
-    engine.run_cycle_for_symbol(selected_symbol)
+    # 1. Lista con tus 18 criptomonedas
+symbols = [
+    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
+    "ADA/USDT", "AVAX/USDT", "DOGE/USDT", "DOT/USDT", "LINK/USDT",
+    "MATIC/USDT", "NEAR/USDT", "LTC/USDT", "SUI/USDT", "APT/USDT",
+    "OP/USDT", "ARBV/USDT", "INJ/USDT"
+]
+
+# 2. Recorrer y analizar cada una
+    for selected_symbol in symbols:
+        engine.run_cycle_for_symbol(selected_symbol)
+
     time.sleep(5)
     st.rerun()
