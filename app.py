@@ -60,7 +60,7 @@ if st.session_state.is_running:
     ]
 
     for selected_symbol in symbols:
-        engine.run_cycle_for_symbol(selected_symbol)
+        engine.bot.run_cycle_for_symbol(selected_symbol)
 
     time.sleep(5)
     st.rerun()
