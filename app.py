@@ -59,8 +59,14 @@ if st.session_state.is_running:
         "OP/USDT", "ARBV/USDT", "INJ/USDT"
     ]
 
+    # Crear instancia del motor si existe la clase TradingEngine
+    bot_instance = getattr(engine, 'bot', None) or (engine.TradingEngine() if hasattr(engine, 'TradingEngine') else None)
+
     for selected_symbol in symbols:
-        engine.bot.run_cycle_for_symbol(selected_symbol)
+        if bot_instance:
+            bot_instance.run_cycle_for_symbol(selected_symbol)
+        elif hasattr(engine, 'run_cycle_for_symbol'):
+            engine.run_cycle_for_symbol(selected_symbol)
 
     time.sleep(5)
     st.rerun()
