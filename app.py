@@ -9,13 +9,14 @@ st.set_page_config(
 
 st.title("🤖 Bot de Trading - PROYECTO DIPPER")
 
-# Inicializar estado de ejecución
+# Inicializar estados de sesión
 if "is_running" not in st.session_state:
     st.session_state.is_running = False
+if "logs" not in st.session_state:
+    st.session_state.logs = []
 
-# Controles principales
+# Controles
 col1, col2 = st.columns(2)
-
 with col1:
     if st.button("▶️ Iniciar Bot", type="primary", use_container_width=True):
         st.session_state.is_running = True
@@ -26,7 +27,6 @@ with col2:
         st.session_state.is_running = False
         st.rerun()
 
-# Estado actual
 if st.session_state.is_running:
     st.success("🟢 Bot en ejecución...")
 else:
@@ -34,23 +34,34 @@ else:
 
 st.divider()
 
-# Sección de métricas y logs
 col_left, col_right = st.columns([1, 1])
+
+# Instancia del motor
+bot_instance = getattr(engine, 'bot', None) or (engine.TradingEngine() if hasattr(engine, 'TradingEngine') else None)
 
 with col_left:
     st.subheader("📊 Estado del Mercado")
-    if hasattr(engine, 'get_status_dataframe'):
-        df = engine.get_status_dataframe()
+    if bot_instance and hasattr(bot_instance, 'get_status_dataframe'):
+        df = bot_instance.get_status_dataframe()
         st.dataframe(df, use_container_width=True)
+    elif hasattr(engine, 'get_status_dataframe'):
+        st.dataframe(engine.get_status_dataframe(), use_container_width=True)
     else:
         st.write("Cargando datos del mercado...")
 
 with col_right:
     st.subheader("📝 Bitácora de Decisiones de la IA")
-    log_text = "\n".join(engine.logs[-10:][::-1]) if hasattr(engine, 'logs') else "Sin eventos aún."
-    st.text_area("Logs:", value=log_text, height=220, disabled=True)
+    # Intentar obtener logs desde el bot o la sesión
+    current_logs = []
+    if bot_instance and hasattr(bot_instance, 'logs'):
+        current_logs = bot_instance.logs
+    elif hasattr(engine, 'logs'):
+        current_logs = engine.logs
+    
+    log_text = "\n".join(current_logs[-15:][::-1]) if current_logs else "Ejecutando análisis de mercado..."
+    st.text_area("Logs:", value=log_text, height=250, disabled=True)
 
-# Bucle de ejecución
+# Ejecución ciclo a ciclo
 if st.session_state.is_running:
     symbols = [
         "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
@@ -59,14 +70,18 @@ if st.session_state.is_running:
         "OP/USDT", "ARBV/USDT", "INJ/USDT"
     ]
 
-    bot_instance = getattr(engine, 'bot', None) or (engine.TradingEngine() if hasattr(engine, 'TradingEngine') else None)
-
-    with st.spinner("Analizando pares en tiempo real..."):
-        for selected_symbol in symbols:
+    status_placeholder = st.empty()
+    
+    for selected_symbol in symbols:
+        status_placeholder.info(f"🔎 Analizando {selected_symbol}...")
+        try:
             if bot_instance:
                 bot_instance.run_cycle_for_symbol(selected_symbol)
             elif hasattr(engine, 'run_cycle_for_symbol'):
                 engine.run_cycle_for_symbol(selected_symbol)
+        except Exception as e:
+            st.warning(f"Error procesando {selected_symbol}: {e}")
 
-    time.sleep(2)
+    status_placeholder.empty()
+    time.sleep(3)
     st.rerun()
