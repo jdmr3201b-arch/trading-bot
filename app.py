@@ -1,4 +1,5 @@
 import streamlit as st
+import pandas as pd
 import time
 import engine
 
@@ -9,11 +10,15 @@ st.set_page_config(
 
 st.title("🤖 Bot de Trading - PROYECTO DIPPER")
 
-# Inicializar estados de sesión
+# 1. Inicializar persistencia de datos en la sesión
 if "is_running" not in st.session_state:
     st.session_state.is_running = False
 if "current_index" not in st.session_state:
     st.session_state.current_index = 0
+if "market_data" not in st.session_state:
+    st.session_state.market_data = {}  # Guardará el último estado de cada par
+if "logs" not in st.session_state:
+    st.session_state.logs = []  # Guardará el historial de logs
 
 symbols = [
     "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT",
@@ -22,7 +27,7 @@ symbols = [
     "OP/USDT", "ARBV/USDT", "INJ/USDT"
 ]
 
-# Controles
+# Controles de inicio / parada
 col1, col2 = st.columns(2)
 with col1:
     if st.button("▶️ Iniciar Bot", type="primary", use_container_width=True):
@@ -37,7 +42,7 @@ with col2:
 
 if st.session_state.is_running:
     current_symbol = symbols[st.session_state.current_index]
-    st.success(f"🟢 Bot en ejecución | Procesando: **{current_symbol}** ({st.session_state.current_index + 1}/{len(symbols)})")
+    st.success(f"🟢 Bot en ejecución | Analizando: **{current_symbol}** ({st.session_state.current_index + 1}/{len(symbols)})")
 else:
     st.info("🔴 Bot detenido.")
 
@@ -50,41 +55,47 @@ bot_instance = getattr(engine, 'bot', None) or (engine.TradingEngine() if hasatt
 
 with col_left:
     st.subheader("📊 Estado del Mercado")
-    if bot_instance and hasattr(bot_instance, 'get_status_dataframe'):
-        try:
-            df = bot_instance.get_status_dataframe()
-            st.dataframe(df, use_container_width=True)
-        except Exception:
-            st.write("Cargando datos del mercado...")
+    # Mostrar la tabla guardada en la memoria de la sesión
+    if st.session_state.market_data:
+        df = pd.DataFrame.from_dict(st.session_state.market_data, orient='index')
+        st.dataframe(df, use_container_width=True)
     else:
         st.write("Cargando datos del mercado...")
 
 with col_right:
     st.subheader("📝 Bitácora de Decisiones de la IA")
-    current_logs = []
-    if bot_instance and hasattr(bot_instance, 'logs'):
-        current_logs = bot_instance.logs
-    elif hasattr(engine, 'logs'):
-        current_logs = engine.logs
-    
-    log_text = "\n".join(current_logs[-15:][::-1]) if current_logs else "Esperando primer análisis..."
+    # Mostrar los logs guardados en la sesión
+    log_text = "\n".join(st.session_state.logs[-15:][::-1]) if st.session_state.logs else "Esperando primer análisis..."
     st.text_area("Logs:", value=log_text, height=250, disabled=True)
 
-# Ejecutar el ciclo par por par de forma continua
+# 2. Bucle de ejecución incremental
 if st.session_state.is_running:
     target_symbol = symbols[st.session_state.current_index]
     
-    print(f"=== PROCESANDO PAR: {target_symbol} ===", flush=True)
-    
     try:
+        # Ejecutar ciclo para el par actual
+        result = None
         if bot_instance:
-            bot_instance.run_cycle_for_symbol(target_symbol)
+            result = bot_instance.run_cycle_for_symbol(target_symbol)
         elif hasattr(engine, 'run_cycle_for_symbol'):
-            engine.run_cycle_for_symbol(target_symbol)
-    except Exception as e:
-        print(f"Error en {target_symbol}: {e}", flush=True)
+            result = engine.run_cycle_for_symbol(target_symbol)
+            
+        # Extraer logs si la función o el motor generaron eventos
+        if bot_instance and hasattr(bot_instance, 'logs') and bot_instance.logs:
+            st.session_state.logs = bot_instance.logs
+        elif hasattr(engine, 'logs') and engine.logs:
+            st.session_state.logs = engine.logs
 
-    # Avanzar al siguiente símbolo para la próxima recarga
+        # Guardar en el estado del mercado si se retorna un diccionario con métricas
+        if isinstance(result, dict):
+            st.session_state.market_data[target_symbol] = result
+        else:
+            st.session_state.market_data[target_symbol] = {"Símbolo": target_symbol, "Estado": "Analizado"}
+
+    except Exception as e:
+        st.session_state.logs.append(f"⚠️ Error en {target_symbol}: {str(e)}")
+
+    # Avanzar al siguiente símbolo
     st.session_state.current_index = (st.session_state.current_index + 1) % len(symbols)
     time.sleep(1)
     st.rerun()
