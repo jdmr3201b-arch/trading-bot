@@ -157,19 +157,19 @@ Responde ÚNICAMENTE en JSON estricto:
 
         setup = self.evaluate_technical_setup(df)
 
-    # REGISTRO DE ACTIVIDAD EN CADA PAR
-    rsi_val = df['RSI'].iloc[-1] if 'RSI' in df and not df.empty else 0
-    close_val = df['close'].iloc[-1] if 'close' in df and not df.empty else 0
-    self.log(f"🔍 [{symbol}] Precio: {close_val:.2f} | RSI: {rsi_val:.1f} | Señal: {setup.get('signal', 'NEUTRAL')}")
+        # REGISTRO DE ACTIVIDAD EN CADA PAR (Correctamente indentado a 8 espacios)
+        rsi_val = df['RSI'].iloc[-1] if 'RSI' in df and not df.empty else 0
+        close_val = df['close'].iloc[-1] if 'close' in df and not df.empty else 0
+        self.log(f"🔍 [{symbol}] Precio: {close_val:.2f} | RSI: {rsi_val:.1f} | Señal: {setup.get('signal', 'NEUTRAL')}")
 
-    if setup['signal'] in ["BUY", "SELL"]:
-        self.log(f"🎯 [{symbol}] Filtro Técnico Superado ({setup['signal']}). Consultando a la IA...")
-        summary_str = df[['close', 'EMA_200', 'RSI', 'volume']].tail(5).to_string()
+        if setup['signal'] in ["BUY", "SELL"]:
+            self.log(f"🎯 [{symbol}] Filtro Técnico Superado ({setup['signal']}). Consultando a la IA...")
+            summary_str = df[['close', 'EMA_200', 'RSI', 'volume']].tail(5).to_string()
 
-        ai_eval = self.consult_ai_filter(symbol, setup, summary_str)
+            ai_eval = self.consult_ai_filter(symbol, setup, summary_str)
 
-        if ai_eval.get('approve') and ai_eval.get('confidence_score', 0) >= 75:
-            self.log(f"✅ IA Aprobó orden en {symbol} ({ai_eval['confidence_score']}% confianza): {ai_eval['reasoning']}")
-            self.execute_automatic_order(symbol, setup['signal'], setup['close_price'], ai_eval['reasoning'])
-        else:
-            self.log(f"❌ IA Rechazó orden en {symbol}: {ai_eval.get('reasoning')}")
+            if ai_eval.get('approve') and ai_eval.get('confidence_score', 0) >= 75:
+                self.log(f"✅ IA Aprobó orden en {symbol} ({ai_eval['confidence_score']}% confianza): {ai_eval['reasoning']}")
+                self.execute_automatic_order(symbol, setup['signal'], setup['close_price'], ai_eval['reasoning'])
+            else:
+                self.log(f"❌ IA Rechazó orden en {symbol}: {ai_eval.get('reasoning')}")
