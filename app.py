@@ -69,7 +69,14 @@ col4.metric(label="Base de Datos", value="SUPABASE", delta="Sincronizado")
 st.divider()
 
 # 2. SELECTOR DE PAR EN TIEMPO REAL
-symbol = st.selectbox("⚡ Seleccionar Par para Análisis en Vivo", ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"])
+# Lista de los 18 pares escaneados por DIPPER
+PARES_DIPPER = [
+    "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "AVAX/USDT",
+    "DOT/USDT", "LINK/USDT", "MATIC/USDT", "NEAR/USDT", "LTC/USDT", "BCH/USDT",
+    "ATOM/USDT", "UNI/USDT", "APT/USDT", "FIL/USDT", "ETC/USDT", "XLM/USDT"
+]
+
+symbol = st.selectbox("⚡ Seleccionar Par para Análisis en Vivo", PARES_DIPPER)
 
 # Función para obtener datos en vivo de Kraken vía CCXT
 @st.cache_data(ttl=15)
