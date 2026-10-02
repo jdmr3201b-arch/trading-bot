@@ -3,3 +3,4 @@ pandas
 google-genai
 supabase
 streamlit
+plotly
