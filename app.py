@@ -16,7 +16,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Estilos Azul Oscuro + Turquesa / Cyan
 st.markdown("""
     <style>
     .stApp { 
@@ -55,27 +54,15 @@ st.title("🤖 PROYECTO DIPPER — Quantitative Dashboard")
 # 2. PILAR 1: MÓDULO DE FILTRO DE NOTICIAS MACRO
 # ==========================================
 
-@st.cache_data(ttl=300)  # Revisa y actualiza el calendario cada 5 minutos
+@st.cache_data(ttl=300)
 def obtener_eventos_macro():
-    """
-    Consulta el calendario económico y filtra eventos de alto impacto para USD / Cripto.
-    """
     try:
-        # Consulta de calendario / eventos de alto impacto
-        # En producción se enlaza a un proveedor de datos de calendario institucional
-        eventos = [
-            # Ejemplo de datos estructurados para validación continua
-            # {"title": "US CPI MoM", "country": "USD", "impact": "High", "date": "2026-10-02T14:30:00Z"}
-        ]
+        eventos = []
         return eventos, "Conexión con calendario OK"
     except Exception as e:
         return [], f"Error al consultar calendario: {str(e)}"
 
 def evaluar_filtro_noticias():
-    """
-    Verifica si la hora actual cae dentro de la ventana de protección (+/- 30 min) 
-    de una noticia de alto impacto.
-    """
     eventos, status_msg = obtener_eventos_macro()
     ahora_utc = datetime.now(timezone.utc)
     
@@ -105,7 +92,7 @@ def evaluar_filtro_noticias():
 filtro_noticias_activo, noticias_mensaje = evaluar_filtro_noticias()
 
 # ==========================================
-# 3. BARRA LATERAL (GESTIÓN DE RIESGO - BARRA RIESGO)
+# 3. BARRA LATERAL (GESTIÓN DE RIESGO)
 # ==========================================
 st.sidebar.header("🛡️ Gestión de Riesgo")
 capital_total = st.sidebar.number_input("Capital Cuenta ($USD)", value=1000.0, step=50.0)
@@ -117,7 +104,7 @@ st.sidebar.markdown("---")
 st.sidebar.metric("Riesgo Máximo por Trade", f"${monto_arriesgado:.2f} USD")
 
 # ==========================================
-# 4.SISTEMA DE PESTAÑAS (LIVE VS BACKTESTING)
+# 4. SISTEMA DE PESTAÑAS
 # ==========================================
 tab_live, tab_backtest = st.tabs(["📡 Monitor en Vivo (24/7)", "🧪 Motor de Backtesting Histórico"])
 
@@ -125,7 +112,6 @@ tab_live, tab_backtest = st.tabs(["📡 Monitor en Vivo (24/7)", "🧪 Motor de 
 # PESTAÑA 1: MONITOR EN VIVO
 # ------------------------------------------
 with tab_live:
-    # Tarjetas Métricas Superiores
     col_m1, col_m2, col_m3, col_m4 = st.columns(4)
     col_m1.metric(label="Estado del Bot", value="🟢 ONLINE", delta="Escaneo Activo")
     
@@ -137,7 +123,6 @@ with tab_live:
     col_m3.metric(label="Guardafuegos Diario", value="🟢 OK", delta=f"Max DD: -{max_drawdown_diario}%")
     col_m4.metric(label="Base de Datos", value="SUPABASE", delta="Sincronizado")
 
-    # Banner de Estado Macro
     if filtro_noticias_activo:
         st.error(noticias_mensaje)
     else:
@@ -145,104 +130,103 @@ with tab_live:
 
     st.divider()
 
-    # Selección de Par y Carga de Datos CCXT
     col_sel1, col_sel2 = st.columns([2, 1])
     symbol = col_sel1.selectbox("⚡ Seleccionar Par para Análisis", ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"])
     timeframe = col_sel2.selectbox("Temporalidad", ["15m", "1h", "4h"], index=0)
 
+    # CARGA MULTI-EXCHANGE CENTRADA EN KRAKEN
     try:
-        exchange = ccxt.binance()
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=100)
+        exchange = ccxt.kraken()
+        symbol_kraken = symbol.replace("/USDT", "/USD") if "/USDT" in symbol else symbol
+        ohlcv = exchange.fetch_ohlcv(symbol_kraken, timeframe=timeframe, limit=100)
+        
         df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        
-        # Indicadores Técnicos
-        df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
-        
-        # Cálculo básico de ATR
-        high_low = df['high'] - df['low']
-        high_close = np.abs(df['high'] - df['close'].shift())
-        low_close = np.abs(df['low'] - df['close'].shift())
-        ranges = pd.concat([high_low, high_close, low_close], axis=1)
-        true_range = np.max(ranges, axis=1)
-        df['atr'] = true_range.rolling(14).mean()
+    except Exception:
+        try:
+            exchange = ccxt.coinbase()
+            symbol_cb = symbol.replace("/USDT", "-USD")
+            ohlcv = exchange.fetch_ohlcv(symbol_cb, timeframe=timeframe, limit=100)
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+        except Exception as e_final:
+            st.error(f"Error al conectar con los servidores de mercado: {str(e_final)}")
+            st.stop()
 
-        precio_actual = df['close'].iloc[-1]
-        ema_actual = df['ema200'].iloc[-1]
-        
-        # Cálculo de Score de Confluencia
-        score = 50
-        if precio_actual > ema_actual:
-            score += 25
-        else:
-            score -= 25
-            
-        # Lógica de Decisiones / Señales incorporando Filtro Macro
-        if filtro_noticias_activo:
-            estado_senal = "NEUTRAL / PAUSA NOTICIAS"
-            mensaje_decision = "Las entradas están bloqueadas preventivamente por volatilidad macroeconómica."
-            color_banner = "st.warning"
-        elif score >= 75:
-            estado_senal = "🟢 SEÑAL DE COMPRA"
-            mensaje_decision = "Estructura alcista validada con confluencia técnica."
-        elif score <= 25:
-            estado_senal = "🔴 SEÑAL DE VENTA"
-            mensaje_decision = "Estructura bajista validada con confluencia técnica."
-        else:
-            estado_senal = "⚪ ESPERAR / RANGO"
-            mensaje_decision = "Mercado sin tendencia clara o en consolidación."
+    # Indicadores Técnicos
+    df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
+    
+    high_low = df['high'] - df['low']
+    high_close = np.abs(df['high'] - df['close'].shift())
+    low_close = np.abs(df['low'] - df['close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    df['atr'] = true_range.rolling(14).mean()
 
-        # Visualización de Señal
-        col_s1, col_s2 = st.columns([1, 2])
-        col_s1.metric("Score Confluencia", f"{score}%")
-        col_s2.subheader(f"Estado: {estado_senal}")
-        st.caption(f"Nota del Motor: {mensaje_decision}")
-
-        # Gráfico Interactivo de Velas con Plotly
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
+    precio_actual = df['close'].iloc[-1]
+    ema_actual = df['ema200'].iloc[-1]
+    
+    score = 50
+    if precio_actual > ema_actual:
+        score += 25
+    else:
+        score -= 25
         
-        # Velas
-        fig.add_trace(go.Candlestick(
-            x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
-            name="Precio"
-        ), row=1, col=1)
-        
-        # EMA 200
-        fig.add_trace(go.Scatter(
-            x=df['timestamp'], y=df['ema200'], mode='lines', line=dict(color='#00F0FF', width=2), name="EMA 200"
-        ), row=1, col=1)
-        
-        # Volumen
-        fig.add_trace(go.Bar(
-            x=df['timestamp'], y=df['volume'], marker_color='#0284C7', name="Volumen"
-        ), row=2, col=1)
+    if filtro_noticias_activo:
+        estado_senal = "NEUTRAL / PAUSA NOTICIAS"
+        mensaje_decision = "Las entradas están bloqueadas preventivamente por volatilidad macroeconómica."
+    elif score >= 75:
+        estado_senal = "🟢 SEÑAL DE COMPRA"
+        mensaje_decision = "Estructura alcista validada con confluencia técnica."
+    elif score <= 25:
+        estado_senal = "🔴 SEÑAL DE VENTA"
+        mensaje_decision = "Estructura bajista validada con confluencia técnica."
+    else:
+        estado_senal = "⚪ ESPERAR / RANGO"
+        mensaje_decision = "Mercado sin tendencia clara o en consolidación."
 
-        # Proyección Take Profit (3%) y Stop Loss (1.5%)
-        tp_price = precio_actual * 1.03
-        sl_price = precio_actual * 0.985
-        
-        fig.add_hline(y=tp_price, line_dash="dash", line_color="#10B981", annotation_text=f"TP (+3%): ${tp_price:.2f}", row=1, col=1)
-        fig.add_hline(y=sl_price, line_dash="dash", line_color="#EF4444", annotation_text=f"SL (-1.5%): ${sl_price:.2f}", row=1, col=1)
+    col_s1, col_s2 = st.columns([1, 2])
+    col_s1.metric("Score Confluencia", f"{score}%")
+    col_s2.subheader(f"Estado: {estado_senal}")
+    st.caption(f"Nota del Motor: {mensaje_decision}")
 
-        fig.update_layout(
-            title=f"Gráfico en Vivo — {symbol} ({timeframe})",
-            template="plotly_dark",
-            paper_bgcolor='#0B1120',
-            plot_bgcolor='#1E293B',
-            xaxis_rangeslider_visible=False,
-            height=500
-        )
-        st.plotly_chart(fig, use_container_width=True)
+    # Gráfico Plotly
+    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
+    
+    fig.add_trace(go.Candlestick(
+        x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
+        name="Precio"
+    ), row=1, col=1)
+    
+    fig.add_trace(go.Scatter(
+        x=df['timestamp'], y=df['ema200'], mode='lines', line=dict(color='#00F0FF', width=2), name="EMA 200"
+    ), row=1, col=1)
+    
+    fig.add_trace(go.Bar(
+        x=df['timestamp'], y=df['volume'], marker_color='#0284C7', name="Volumen"
+    ), row=2, col=1)
 
-    except Exception as e:
-        st.error(f"Error al conectar con la API de precios: {str(e)}")
+    tp_price = precio_actual * 1.03
+    sl_price = precio_actual * 0.985
+    
+    fig.add_hline(y=tp_price, line_dash="dash", line_color="#10B981", annotation_text=f"TP (+3%): ${tp_price:.2f}", row=1, col=1)
+    fig.add_hline(y=sl_price, line_dash="dash", line_color="#EF4444", annotation_text=f"SL (-1.5%): ${sl_price:.2f}", row=1, col=1)
+
+    fig.update_layout(
+        title=f"Gráfico en Vivo — {symbol} ({timeframe})",
+        template="plotly_dark",
+        paper_bgcolor='#0B1120',
+        plot_bgcolor='#1E293B',
+        xaxis_rangeslider_visible=False,
+        height=500
+    )
+    st.plotly_chart(fig, use_container_width=True)
 
 # ------------------------------------------
 # PESTAÑA 2: MOTOR DE BACKTESTING HISTÓRICO
 # ------------------------------------------
 with tab_backtest:
     st.subheader("🧪 Simulación Histórica de Estrategia (Backtesting)")
-    st.markdown("Evalúa el rendimiento cuantitativo de la estrategia utilizando datos pasados de mercado.")
     
     col_bt1, col_bt2, col_bt3 = st.columns(3)
     bt_pair = col_bt1.selectbox("Par a evaluar", ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
@@ -250,10 +234,11 @@ with tab_backtest:
     btn_run = col_bt3.button("🚀 Ejecutar Backtest")
     
     if btn_run:
-        with st.spinner("Descargando datos históricos y simulando ejecuciones..."):
+        with st.spinner("Descargando datos históricos de Kraken y simulando..."):
             try:
-                exchange_bt = ccxt.binance()
-                ohlcv_bt = exchange_bt.fetch_ohlcv(bt_pair, timeframe='1h', limit=500)
+                exchange_bt = ccxt.kraken()
+                symbol_bt = bt_pair.replace("/USDT", "/USD")
+                ohlcv_bt = exchange_bt.fetch_ohlcv(symbol_bt, timeframe='1h', limit=500)
                 df_bt = pd.DataFrame(ohlcv_bt, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
                 df_bt['timestamp'] = pd.to_datetime(df_bt['timestamp'], unit='ms')
                 df_bt['ema200'] = df_bt['close'].ewm(span=200, adjust=False).mean()
@@ -266,7 +251,6 @@ with tab_backtest:
                     row = df_bt.iloc[i]
                     prev_row = df_bt.iloc[i-1]
                     
-                    # Cruce alcista sobre EMA 200
                     if prev_row['close'] < prev_row['ema200'] and row['close'] > row['ema200']:
                         entry = row['close']
                         tp = entry * 1.03
@@ -292,14 +276,12 @@ with tab_backtest:
                 win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
                 profit_factor = (wins * 3.0) / ((total_trades - wins) * 1.5) if (total_trades - wins) > 0 else 2.0
                 
-                # Métricas
                 res1, res2, res3, res4 = st.columns(4)
-                res1.metric("Total Trades Simulares", f"{total_trades}")
+                res1.metric("Total Trades Simulados", f"{total_trades}")
                 res2.metric("Win Rate %", f"{win_rate:.1f}%")
                 res3.metric("Profit Factor", f"{profit_factor:.2f}")
                 res4.metric("Capital Final Simulado", f"${capital_sim:,.2f} USD")
                 
-                # Curva de Capital
                 fig_eq = go.Figure()
                 fig_eq.add_trace(go.Scatter(
                     y=equity_curve, mode='lines', line=dict(color='#00F0FF', width=2), name="Curva de Capital"
