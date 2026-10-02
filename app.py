@@ -78,11 +78,18 @@ PARES_DIPPER = [
 
 symbol = st.selectbox("⚡ Seleccionar Par para Análisis en Vivo", PARES_DIPPER)
 
-# Función para obtener datos en vivo de Kraken vía CCXT
+# Función robusta para obtener datos en vivo vía Binance / Kraken
 @st.cache_data(ttl=15)
 def fetch_live_ohlcv(pair):
-    exchange = ccxt.kraken()
-    ohlcv = exchange.fetch_ohlcv(pair, timeframe='15m', limit=60)
+    try:
+        exchange = ccxt.binance()
+        ohlcv = exchange.fetch_ohlcv(pair, timeframe='15m', limit=60)
+    except Exception:
+        # Respaldo si falla el exchange principal
+        exchange = ccxt.kraken()
+        alt_pair = pair.replace('/USDT', '/USD')
+        ohlcv = exchange.fetch_ohlcv(alt_pair, timeframe='15m', limit=60)
+        
     df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
     df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
     df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
