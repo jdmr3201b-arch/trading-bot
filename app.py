@@ -4,7 +4,7 @@ from plotly.subplots import make_subplots
 import pandas as pd
 import ccxt
 
-# Configuración de página
+# Configuración de página estilo Dashboard Oscuro
 st.set_page_config(page_title="PROYECTO DIPPER | Quant Dashboard", layout="wide")
 
 # 🎨 PALETA DE COLORES PERSONALIZADA (Azul Oscuro Opaco + Turquesa)
@@ -37,11 +37,6 @@ st.markdown("""
         font-weight: 600;
     }
     
-    /* Contenedores y Cajas */
-    div[data-aria-selected="true"] {
-        background-color: #0284C7 !important;
-    }
-    
     /* Selectbox e Inputs */
     .stSelectbox > div > div {
         background-color: #1E293B !important;
@@ -68,8 +63,7 @@ col4.metric(label="Base de Datos", value="SUPABASE", delta="Sincronizado")
 
 st.divider()
 
-# 2. SELECTOR DE PAR EN TIEMPO REAL
-# Lista de los 18 pares escaneados por DIPPER
+# 2. SELECTOR DE PAR EN TIEMPO REAL (18 Pares de DIPPER)
 PARES_DIPPER = [
     "BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "AVAX/USDT",
     "DOT/USDT", "LINK/USDT", "MATIC/USDT", "NEAR/USDT", "LTC/USDT", "BCH/USDT",
@@ -78,7 +72,7 @@ PARES_DIPPER = [
 
 symbol = st.selectbox("⚡ Seleccionar Par para Análisis en Vivo", PARES_DIPPER)
 
-# Función robusta para obtener datos en vivo vía Binance / Kraken
+# 3. FUNCIÓN ROBUSTA DE OBTENCIÓN DE DATOS EN VIVO
 @st.cache_data(ttl=15)
 def fetch_live_ohlcv(pair):
     try:
@@ -98,7 +92,7 @@ def fetch_live_ohlcv(pair):
 df = fetch_live_ohlcv(symbol)
 last_price = df['close'].iloc[-1]
 
-# 3. SCORE DE PROBABILIDAD DINÁMICO
+# 4. SCORE DE PROBABILIDAD DINÁMICO
 ema_val = df['ema200'].iloc[-1]
 bullish_ema = last_price > ema_val
 score = 35  # Base
@@ -109,10 +103,11 @@ score += 20  # Confluencia de volumen y RSI simulada
 
 col_chart, col_stats = st.columns([3, 1])
 
+# 5. PANEL LATERAL DE PROBABILIDAD Y NIVELES TÉCNICOS
 with col_stats:
     st.subheader("📊 Probabilidad de Setup")
     st.progress(score / 100)
-    st.markdown(f"**Score de Confluencia:** `<span style='color:#38BDF8; font-size:20px;'>{score}%</span>`", unsafe_allow_html=True)
+    st.markdown(f"**Score de Confluencia:** <span style='color:#38BDF8; font-size:22px; font-weight:bold;'>{score}%</span>", unsafe_allow_html=True)
     
     if score >= 75:
         st.success("🔥 ALTA PROBABILIDAD EN COMPRA")
@@ -123,11 +118,11 @@ with col_stats:
 
     st.markdown("---")
     st.markdown("<h4 style='color:#38BDF8;'>Niveles Técnicos</h4>", unsafe_allow_html=True)
-    st.write(f"🔹 **Precio Actual:** `${last_price:,.2f}`")
-    st.write(f"🎯 **Take Profit (3%):** `<span style='color:#10B981;'>${last_price * 1.03:,.2f}</span>`", unsafe_allow_html=True)
-    st.write(f"🛑 **Stop Loss (1.5%):** `<span style='color:#EF4444;'>${last_price * 0.985:,.2f}</span>`", unsafe_allow_html=True)
+    st.markdown(f"🔹 **Precio Actual:** `${last_price:,.4f}` if last_price < 1 else `${last_price:,.2f}`")
+    st.markdown(f"🎯 **Take Profit (3%):** <span style='color:#10B981; font-weight:bold;'>${last_price * 1.03:,.4f if last_price < 1 else last_price * 1.03:,.2f}</span>", unsafe_allow_html=True)
+    st.markdown(f"🛑 **Stop Loss (1.5%):** <span style='color:#EF4444; font-weight:bold;'>${last_price * 0.985:,.4f if last_price < 1 else last_price * 0.985:,.2f}</span>", unsafe_allow_html=True)
 
-# 4. GRÁFICO DE VELAS EN TIEMPO REAL CON COLORES RESERVADOS
+# 6. GRÁFICO DE VELAS EN TIEMPO REAL CON PLOTLY
 with col_chart:
     fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
 
@@ -147,17 +142,17 @@ with col_chart:
         line=dict(color='#00F0FF', width=2), name="EMA 200"
     ), row=1, col=1)
 
-    # Líneas de TP y SL
+    # Líneas de TP y SL reservadas en Verde y Rojo
     fig.add_hline(y=last_price * 1.03, line_dash="dash", line_color="#10B981", annotation_text="TP 3.0%", row=1, col=1)
     fig.add_hline(y=last_price * 0.985, line_dash="dash", line_color="#EF4444", annotation_text="SL 1.5%", row=1, col=1)
 
-    # Volumen en Turquesa Translúcido
+    # Volumen en Azul Turquesa
     fig.add_trace(go.Bar(
         x=df['timestamp'], y=df['volume'],
         marker_color='#0284C7', name="Volumen"
     ), row=2, col=1)
 
-    # Layout con fondo Azul Oscuro Opaco (#0B1120 y #1E293B)
+    # Layout en Azul Oscuro Opaco
     fig.update_layout(
         template="plotly_dark",
         paper_bgcolor='#0B1120',
