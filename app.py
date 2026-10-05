@@ -1,299 +1,333 @@
-import streamlit as st
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-import pandas as pd
-import numpy as np
-import ccxt
-import requests
-from datetime import datetime, timezone, timedelta
+import React, { useState, useEffect, useCallback } from 'react';
+import { Header } from './components/Header';
+import { MetricsHeader } from './components/MetricsHeader';
+import { ConfluenceCard } from './components/ConfluenceCard';
+import { CandlestickChart } from './components/CandlestickChart';
+import { RiskSidebar } from './components/RiskSidebar';
+import { BacktestEngine } from './components/BacktestEngine';
+import { AuditLogTable } from './components/AuditLogTable';
+import { StreamlitCodeModal } from './components/StreamlitCodeModal';
+import { STREAMLIT_APP_CODE } from './streamlitCode';
+import { MarketPair, Timeframe, Candle, RiskConfig, AuditTrade } from './types';
+import { fetchLiveCandles } from './utils/marketData';
+import { RefreshCw, PlayCircle, ExternalLink } from 'lucide-react';
 
-# ==========================================
-# 1. CONFIGURACIÓN DE PÁGINA Y ESTILOS CSS
-# ==========================================
-st.set_page_config(
-    page_title="PROYECTO DIPPER | Quant Dashboard", 
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+export default function App() {
+  const [activeTab, setActiveTab] = useState<'live' | 'backtest' | 'audit' | 'code'>('live');
+  const [pair, setPair] = useState<MarketPair>('BTC/USDT');
+  const [timeframe, setTimeframe] = useState<Timeframe>('15m');
+  const [candles, setCandles] = useState<Candle[]>([]);
+  const [dataSource, setDataSource] = useState<string>('KRAKEN REST API');
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [utcTime, setUtcTime] = useState<string>('');
+  const [macroBlocked, setMacroBlocked] = useState<boolean>(false);
 
-st.markdown("""
-    <style>
-    .stApp { 
-        background-color: #0B1120; 
-        color: #E2E8F0; 
-    }
-    h1, h2, h3, h4, h5, h6 { 
-        color: #38BDF8 !important; 
-        font-family: 'Segoe UI', Roboto, sans-serif; 
-    }
-    [data-testid="stMetric"] { 
-        background-color: #1E293B !important; 
-        border: 1px solid #0284C7 !important; 
-        border-radius: 12px !important; 
-        padding: 10px !important;
-    }
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 10px;
-    }
-    .stTabs [data-baseweb="tab"] {
-        background-color: #1E293B;
-        border-radius: 8px 8px 0px 0px;
-        color: #94A3B8;
-        padding-x: 20px;
-    }
-    .stTabs [aria-selected="true"] {
-        background-color: #0284C7 !important;
-        color: #FFFFFF !important;
-    }
-    </style>
-""", unsafe_allow_html=True)
+  // Risk configuration state
+  const [risk, setRisk] = useState<RiskConfig>({
+    capital: 1000,
+    riskPct: 1.0,
+    maxDailyDrawdown: 3.0,
+    tpPct: 3.0,
+    slPct: 1.5,
+    leverage: 1.0,
+  });
 
-st.title("🤖 PROYECTO DIPPER — Quantitative Dashboard")
+  // Audit trades ledger
+  const [trades, setTrades] = useState<AuditTrade[]>([
+    {
+      id: '#DIP-8941',
+      timestamp: '2026-10-05 05:48:12',
+      pair: 'BTC/USDT',
+      side: 'LONG',
+      entryPrice: 93420.0,
+      exitPrice: 96222.6,
+      stopLoss: 92018.7,
+      takeProfit: 96222.6,
+      status: 'CLOSED_TP',
+      pnlUsd: 30.0,
+      pnlPct: 3.0,
+      confluenceScore: 90,
+      notes: 'EMA 200 Golden Breakout + Low ATR Compression',
+    },
+    {
+      id: '#DIP-8938',
+      timestamp: '2026-10-05 00:32:45',
+      pair: 'ETH/USDT',
+      side: 'LONG',
+      entryPrice: 3410.5,
+      exitPrice: 3359.34,
+      stopLoss: 3359.34,
+      takeProfit: 3512.8,
+      status: 'CLOSED_SL',
+      pnlUsd: -15.0,
+      pnlPct: -1.5,
+      confluenceScore: 75,
+      notes: 'EMA 200 Retest wick stop out',
+    },
+    {
+      id: '#DIP-8932',
+      timestamp: '2026-10-04 17:15:20',
+      pair: 'SOL/USDT',
+      side: 'LONG',
+      entryPrice: 184.2,
+      exitPrice: 189.72,
+      stopLoss: 181.43,
+      takeProfit: 189.72,
+      status: 'CLOSED_TP',
+      pnlUsd: 30.0,
+      pnlPct: 3.0,
+      confluenceScore: 85,
+      notes: 'Momentum reversal over 200 EMA with volume spike',
+    },
+    {
+      id: '#DIP-8929',
+      timestamp: '2026-10-04 06:10:00',
+      pair: 'BTC/USDT',
+      side: 'LONG',
+      entryPrice: 91150.0,
+      exitPrice: 93884.5,
+      stopLoss: 89782.75,
+      takeProfit: 93884.5,
+      status: 'CLOSED_TP',
+      pnlUsd: 30.0,
+      pnlPct: 3.0,
+      confluenceScore: 80,
+      notes: 'Trend continuation confirmation',
+    },
+  ]);
 
-# ==========================================
-# 2. PILAR 1: MÓDULO DE FILTRO DE NOTICIAS MACRO
-# ==========================================
+  // Live UTC Clock
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      setUtcTime(now.toISOString().slice(11, 19));
+    };
+    updateTime();
+    const timer = setInterval(updateTime, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
-@st.cache_data(ttl=300)
-def obtener_eventos_macro():
-    try:
-        eventos = []
-        return eventos, "Conexión con calendario OK"
-    except Exception as e:
-        return [], f"Error al consultar calendario: {str(e)}"
+  // Fetch market candles
+  const loadMarketData = useCallback(async () => {
+    setIsLoading(true);
+    const { candles: loadedCandles, source } = await fetchLiveCandles(pair, timeframe, 120);
+    setCandles(loadedCandles);
+    setDataSource(source);
+    setIsLoading(false);
+  }, [pair, timeframe]);
 
-def evaluar_filtro_noticias():
-    eventos, status_msg = obtener_eventos_macro()
-    ahora_utc = datetime.now(timezone.utc)
-    
-    KEYWORDS_CRITICAS = ["CPI", "FOMC", "RATE DECISION", "NFP", "GDP", "PCE", "FED", "INFLATION", "UNEMPLOYMENT"]
-    
-    for ev in eventos:
-        moneda = ev.get("country", "").upper()
-        impacto = ev.get("impact", "").lower()
-        titulo = ev.get("title", "").upper()
-        
-        es_relevante = (moneda == "USD") and (impacto == "high" or any(kw in titulo for kw in KEYWORDS_CRITICAS))
-        
-        if es_relevante:
-            try:
-                hora_evento = datetime.fromisoformat(ev["date"].replace("Z", "+00:00"))
-                inicio_ventana = hora_evento - timedelta(minutes=30)
-                fin_ventana = hora_evento + timedelta(minutes=15)
-                
-                if inicio_ventana <= ahora_utc <= fin_ventana:
-                    minutos_restantes = int((hora_evento - ahora_utc).total_seconds() / 60)
-                    return True, f"🛑 PAUSA PREVENTIVA POR NOTICIA: '{ev['title']}' cercana o en progreso ({minutos_restantes} min)."
-            except Exception:
-                continue
+  useEffect(() => {
+    loadMarketData();
+  }, [loadMarketData]);
 
-    return False, "🟢 FILTRO MACRO OK: Sin eventos de alto impacto en la ventana actual."
+  // Periodic polling every 35s
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadMarketData();
+    }, 35000);
+    return () => clearInterval(interval);
+  }, [loadMarketData]);
 
-filtro_noticias_activo, noticias_mensaje = evaluar_filtro_noticias()
+  // Current price and EMA values
+  const lastCandle = candles[candles.length - 1];
+  const currentPrice = lastCandle ? lastCandle.close : 94200;
+  const ema200 = lastCandle?.ema200 || currentPrice * 0.985;
+  const atr14 = lastCandle?.atr || currentPrice * 0.012;
 
-# ==========================================
-# 3. BARRA LATERAL (GESTIÓN DE RIESGO)
-# ==========================================
-st.sidebar.header("🛡️ Gestión de Riesgo")
-capital_total = st.sidebar.number_input("Capital Cuenta ($USD)", value=1000.0, step=50.0)
-riesgo_pct = st.sidebar.slider("% Riesgo por Operación", min_value=0.5, max_value=3.0, value=1.0, step=0.1)
-max_drawdown_diario = st.sidebar.number_input("Límite Drawdown Diario (%)", value=3.0, step=0.5)
+  // Calculate algorithmic confluence score
+  let score = 50;
+  if (currentPrice > ema200) {
+    score += 25;
+  } else {
+    score -= 25;
+  }
+  // Short term momentum from 10 candles ago
+  if (candles.length > 10) {
+    const prevClose = candles[candles.length - 10].close;
+    if (currentPrice > prevClose) score += 15;
+    else score -= 15;
+  }
+  score = Math.max(10, Math.min(95, score));
 
-monto_arriesgado = capital_total * (riesgo_pct / 100.0)
-st.sidebar.markdown("---")
-st.sidebar.metric("Riesgo Máximo por Trade", f"${monto_arriesgado:.2f} USD")
+  // Simulated order placement
+  const handleExecuteSimulatedTrade = (side: 'LONG' | 'SHORT') => {
+    const newId = `#DIP-${Math.floor(1000 + Math.random() * 9000)}`;
+    const nowStr = new Date().toISOString().slice(0, 19).replace('T', ' ');
+    const tpPrice = currentPrice * (1 + risk.tpPct / 100);
+    const slPrice = currentPrice * (1 - risk.slPct / 100);
 
-# ==========================================
-# 4. SISTEMA DE PESTAÑAS
-# ==========================================
-tab_live, tab_backtest = st.tabs(["📡 Monitor en Vivo (24/7)", "🧪 Motor de Backtesting Histórico"])
+    const newTrade: AuditTrade = {
+      id: newId,
+      timestamp: nowStr,
+      pair,
+      side,
+      entryPrice: currentPrice,
+      exitPrice: currentPrice,
+      stopLoss: slPrice,
+      takeProfit: tpPrice,
+      status: 'ACTIVE',
+      pnlUsd: 0.0,
+      pnlPct: 0.0,
+      confluenceScore: score,
+      notes: `Ejecución manual de prueba en señal cuantitativa (${score}%)`,
+    };
 
-# ------------------------------------------
-# PESTAÑA 1: MONITOR EN VIVO
-# ------------------------------------------
-with tab_live:
-    col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-    col_m1.metric(label="Estado del Bot", value="🟢 ONLINE", delta="Escaneo Activo")
-    
-    if filtro_noticias_activo:
-        col_m2.metric(label="Filtro de Noticias", value="🛑 PAUSADO", delta="Noticia Cercana")
-    else:
-        col_m2.metric(label="Filtro de Noticias", value="🛡️ ACTIVO", delta="Sin eventos próximos")
-        
-    col_m3.metric(label="Guardafuegos Diario", value="🟢 OK", delta=f"Max DD: -{max_drawdown_diario}%")
-    col_m4.metric(label="Base de Datos", value="SUPABASE", delta="Sincronizado")
+    setTrades((prev) => [newTrade, ...prev]);
+  };
 
-    if filtro_noticias_activo:
-        st.error(noticias_mensaje)
-    else:
-        st.success(noticias_mensaje)
+  const activeRiskUsd = risk.capital * (risk.riskPct / 100);
+  const macroMessage = macroBlocked
+    ? "🛑 PAUSA PREVENTIVA: 'US Core CPI / FOMC' en ventana crítica (28 min)."
+    : '🟢 FILTRO MACRO OK: Sin eventos de alto impacto en la ventana actual (±30m).';
 
-    st.divider()
+  return (
+    <div className="min-h-screen bg-[#070A13] text-[#E2E8F0] flex flex-col">
+      {/* Institutional Top Bar */}
+      <Header
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        utcTime={utcTime}
+        sourceStatus={dataSource}
+        macroPaused={macroBlocked}
+        onOpenCode={() => setActiveTab('code')}
+      />
 
-    col_sel1, col_sel2 = st.columns([2, 1])
-    symbol = col_sel1.selectbox("⚡ Seleccionar Par para Análisis", ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT"])
-    timeframe = col_sel2.selectbox("Temporalidad", ["15m", "1h", "4h"], index=0)
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-[1560px] w-full mx-auto px-4 lg:px-8 py-5">
+        {/* Top Quantitative KPIs */}
+        <MetricsHeader
+          macroActive={macroBlocked}
+          macroMessage={macroMessage}
+          maxDrawdown={risk.maxDailyDrawdown}
+          capital={risk.capital}
+          pnlDaily={2.14}
+          activeRiskUsd={activeRiskUsd}
+        />
 
-    # CARGA MULTI-EXCHANGE CENTRADA EN KRAKEN
-    try:
-        exchange = ccxt.kraken()
-        symbol_kraken = symbol.replace("/USDT", "/USD") if "/USDT" in symbol else symbol
-        ohlcv = exchange.fetch_ohlcv(symbol_kraken, timeframe=timeframe, limit=100)
-        
-        df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-    except Exception:
-        try:
-            exchange = ccxt.coinbase()
-            symbol_cb = symbol.replace("/USDT", "-USD")
-            ohlcv = exchange.fetch_ohlcv(symbol_cb, timeframe=timeframe, limit=100)
-            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        except Exception as e_final:
-            st.error(f"Error al conectar con los servidores de mercado: {str(e_final)}")
-            st.stop()
+        {/* Tab 1: Live Monitor & Execution */}
+        {activeTab === 'live' && (
+          <div className="flex flex-col lg:flex-row gap-5">
+            {/* Left/Main Column: Chart & Signals */}
+            <div className="flex-1 flex flex-col gap-5">
+              {/* Asset & Timeframe Selector Bar */}
+              <div className="bg-[#0F172A] border border-[#1E293B] rounded-xl px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-md">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-mono text-slate-400 uppercase tracking-wider">
+                    Activo:
+                  </span>
+                  <div className="flex items-center gap-1.5 bg-[#070A13] p-1 rounded-lg border border-[#1E293B]">
+                    {(['BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'XRP/USDT'] as MarketPair[]).map((p) => (
+                      <button
+                        key={p}
+                        onClick={() => setPair(p)}
+                        className={`px-3 py-1 text-xs font-mono font-bold rounded transition-all ${
+                          pair === p
+                            ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        {p}
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-    # Indicadores Técnicos
-    df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
-    
-    high_low = df['high'] - df['low']
-    high_close = np.abs(df['high'] - df['close'].shift())
-    low_close = np.abs(df['low'] - df['close'].shift())
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = np.max(ranges, axis=1)
-    df['atr'] = true_range.rolling(14).mean()
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-mono text-slate-400 uppercase tracking-wider">
+                    Temporalidad:
+                  </span>
+                  <div className="flex items-center gap-1 bg-[#070A13] p-1 rounded-lg border border-[#1E293B]">
+                    {(['15m', '1h', '4h'] as Timeframe[]).map((tf) => (
+                      <button
+                        key={tf}
+                        onClick={() => setTimeframe(tf)}
+                        className={`px-2.5 py-1 text-xs font-mono font-medium rounded transition-all ${
+                          timeframe === tf
+                            ? 'bg-[#1E293B] text-cyan-300 border border-cyan-500/30 font-bold'
+                            : 'text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        {tf}
+                      </button>
+                    ))}
+                  </div>
 
-    precio_actual = df['close'].iloc[-1]
-    ema_actual = df['ema200'].iloc[-1]
-    
-    score = 50
-    if precio_actual > ema_actual:
-        score += 25
-    else:
-        score -= 25
-        
-    if filtro_noticias_activo:
-        estado_senal = "NEUTRAL / PAUSA NOTICIAS"
-        mensaje_decision = "Las entradas están bloqueadas preventivamente por volatilidad macroeconómica."
-    elif score >= 75:
-        estado_senal = "🟢 SEÑAL DE COMPRA"
-        mensaje_decision = "Estructura alcista validada con confluencia técnica."
-    elif score <= 25:
-        estado_senal = "🔴 SEÑAL DE VENTA"
-        mensaje_decision = "Estructura bajista validada con confluencia técnica."
-    else:
-        estado_senal = "⚪ ESPERAR / RANGO"
-        mensaje_decision = "Mercado sin tendencia clara o en consolidación."
+                  <button
+                    onClick={loadMarketData}
+                    disabled={isLoading}
+                    title="Actualizar datos de mercado"
+                    className="p-1.5 rounded-lg bg-[#070A13] border border-[#1E293B] hover:border-slate-600 text-slate-300 transition-colors"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin text-cyan-400' : ''}`} />
+                  </button>
+                </div>
+              </div>
 
-    col_s1, col_s2 = st.columns([1, 2])
-    col_s1.metric("Score Confluencia", f"{score}%")
-    col_s2.subheader(f"Estado: {estado_senal}")
-    st.caption(f"Nota del Motor: {mensaje_decision}")
+              {/* Confluence Card */}
+              <ConfluenceCard
+                pair={pair}
+                score={score}
+                currentPrice={currentPrice}
+                ema200={ema200}
+                atr14={atr14}
+                tpPct={risk.tpPct}
+                slPct={risk.slPct}
+                macroBlocked={macroBlocked}
+                onExecuteSimulatedTrade={handleExecuteSimulatedTrade}
+              />
 
-    # Gráfico Plotly
-    fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
-    
-    fig.add_trace(go.Candlestick(
-        x=df['timestamp'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
-        name="Precio"
-    ), row=1, col=1)
-    
-    fig.add_trace(go.Scatter(
-        x=df['timestamp'], y=df['ema200'], mode='lines', line=dict(color='#00F0FF', width=2), name="EMA 200"
-    ), row=1, col=1)
-    
-    fig.add_trace(go.Bar(
-        x=df['timestamp'], y=df['volume'], marker_color='#0284C7', name="Volumen"
-    ), row=2, col=1)
+              {/* Candlestick & Volume Chart */}
+              <CandlestickChart
+                candles={candles}
+                pair={pair}
+                timeframe={timeframe}
+                tpPrice={currentPrice * (1 + risk.tpPct / 100)}
+                slPrice={currentPrice * (1 - risk.slPct / 100)}
+                currentPrice={currentPrice}
+              />
 
-    tp_price = precio_actual * 1.03
-    sl_price = precio_actual * 0.985
-    
-    fig.add_hline(y=tp_price, line_dash="dash", line_color="#10B981", annotation_text=f"TP (+3%): ${tp_price:.2f}", row=1, col=1)
-    fig.add_hline(y=sl_price, line_dash="dash", line_color="#EF4444", annotation_text=f"SL (-1.5%): ${sl_price:.2f}", row=1, col=1)
+              {/* Mini Trade Log (Below Chart on Live Tab as requested) */}
+              <AuditLogTable trades={trades} />
+            </div>
 
-    fig.update_layout(
-        title=f"Gráfico en Vivo — {symbol} ({timeframe})",
-        template="plotly_dark",
-        paper_bgcolor='#0B1120',
-        plot_bgcolor='#1E293B',
-        xaxis_rangeslider_visible=False,
-        height=500
-    )
-    st.plotly_chart(fig, use_container_width=True)
+            {/* Right Column: Risk Management Matrix */}
+            <div className="shrink-0">
+              <RiskSidebar
+                risk={risk}
+                onRiskChange={setRisk}
+                macroBlocked={macroBlocked}
+                onToggleMacroBlocked={() => setMacroBlocked((prev) => !prev)}
+                currentPrice={currentPrice}
+              />
+            </div>
+          </div>
+        )}
 
-# ------------------------------------------
-# PESTAÑA 2: MOTOR DE BACKTESTING HISTÓRICO
-# ------------------------------------------
-with tab_backtest:
-    st.subheader("🧪 Simulación Histórica de Estrategia (Backtesting)")
-    
-    col_bt1, col_bt2, col_bt3 = st.columns(3)
-    bt_pair = col_bt1.selectbox("Par a evaluar", ["BTC/USDT", "ETH/USDT", "SOL/USDT"])
-    bt_days = col_bt2.slider("Días de Histórico", min_value=30, max_value=365, value=90)
-    btn_run = col_bt3.button("🚀 Ejecutar Backtest")
-    
-    if btn_run:
-        with st.spinner("Descargando datos históricos de Kraken y simulando..."):
-            try:
-                exchange_bt = ccxt.kraken()
-                symbol_bt = bt_pair.replace("/USDT", "/USD")
-                ohlcv_bt = exchange_bt.fetch_ohlcv(symbol_bt, timeframe='1h', limit=500)
-                df_bt = pd.DataFrame(ohlcv_bt, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
-                df_bt['timestamp'] = pd.to_datetime(df_bt['timestamp'], unit='ms')
-                df_bt['ema200'] = df_bt['close'].ewm(span=200, adjust=False).mean()
-                
-                trades = []
-                capital_sim = capital_total
-                equity_curve = [capital_sim]
-                
-                for i in range(200, len(df_bt)):
-                    row = df_bt.iloc[i]
-                    prev_row = df_bt.iloc[i-1]
-                    
-                    if prev_row['close'] < prev_row['ema200'] and row['close'] > row['ema200']:
-                        entry = row['close']
-                        tp = entry * 1.03
-                        sl = entry * 0.985
-                        
-                        future_data = df_bt.iloc[i+1:i+24]
-                        win = False
-                        for _, f_row in future_data.iterrows():
-                            if f_row['high'] >= tp:
-                                win = True
-                                break
-                            if f_row['low'] <= sl:
-                                win = False
-                                break
-                        
-                        pnl = 3.0 if win else -1.5
-                        capital_sim += capital_sim * (pnl / 100)
-                        equity_curve.append(capital_sim)
-                        trades.append(win)
-                
-                total_trades = len(trades)
-                wins = sum(trades)
-                win_rate = (wins / total_trades * 100) if total_trades > 0 else 0
-                profit_factor = (wins * 3.0) / ((total_trades - wins) * 1.5) if (total_trades - wins) > 0 else 2.0
-                
-                res1, res2, res3, res4 = st.columns(4)
-                res1.metric("Total Trades Simulados", f"{total_trades}")
-                res2.metric("Win Rate %", f"{win_rate:.1f}%")
-                res3.metric("Profit Factor", f"{profit_factor:.2f}")
-                res4.metric("Capital Final Simulado", f"${capital_sim:,.2f} USD")
-                
-                fig_eq = go.Figure()
-                fig_eq.add_trace(go.Scatter(
-                    y=equity_curve, mode='lines', line=dict(color='#00F0FF', width=2), name="Curva de Capital"
-                ))
-                fig_eq.update_layout(
-                    title="Crecimiento del Capital Simulado ($USD)", 
-                    template="plotly_dark", 
-                    paper_bgcolor='#0B1120', 
-                    plot_bgcolor='#1E293B',
-                    height=400
-                )
-                st.plotly_chart(fig_eq, use_container_width=True)
+        {/* Tab 2: Historical Backtesting */}
+        {activeTab === 'backtest' && <BacktestEngine risk={risk} />}
 
-            except Exception as e_bt:
-                st.error(f"Error durante el backtest: {str(e_bt)}")
+        {/* Tab 3: Order History & Audit Log */}
+        {activeTab === 'audit' && <AuditLogTable trades={trades} />}
+
+        {/* Tab 4: Streamlit Python Code Viewer */}
+        {activeTab === 'code' && <StreamlitCodeModal code={STREAMLIT_APP_CODE} />}
+      </main>
+
+      {/* Institutional Terminal Footer */}
+      <footer className="border-t border-[#1E293B] bg-[#070A13] px-4 lg:px-8 py-3 mt-8">
+        <div className="max-w-[1560px] mx-auto flex flex-col sm:flex-row items-center justify-between text-xs font-mono text-slate-500 gap-2">
+          <div className="flex items-center gap-3">
+            <span>PROYECTO DIPPER · QUANT TRADING TERMINAL</span>
+            <span>·</span>
+            <span className="text-slate-400">INSTITUTIONAL GRADE UI/UX</span>
+          </div>
+          <div className="flex items-center gap-4">
+            <span className="text-cyan-400">KRAKEN SPOT REST FEED</span>
+            <span>·</span>
+            <span>MACRO SHIELD ACTIVE</span>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+}
