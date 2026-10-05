@@ -28,7 +28,6 @@ st.markdown("""
     }
     .stApp { background-color: #070a13; }
     
-    /* Header Status Cards */
     .status-card {
         background: #0f172a;
         border: 1px solid #1e293b;
@@ -40,7 +39,6 @@ st.markdown("""
     .status-value { font-size: 16px; font-weight: bold; color: #38bdf8; margin-top: 4px; }
     .status-sub { font-size: 11px; color: #34d399; margin-top: 2px; }
 
-    /* Signal Card */
     .signal-card-long {
         background: rgba(16, 185, 129, 0.1);
         border: 1px solid #10b981;
@@ -54,7 +52,6 @@ st.markdown("""
         padding: 20px;
     }
     
-    /* Botones y Widgets */
     .stButton>button {
         width: 100%;
         background-color: #3b82f6 !important;
@@ -63,16 +60,10 @@ st.markdown("""
         border: none;
         border-radius: 6px;
         padding: 10px;
-        transition: all 0.2s;
-    }
-    .stButton>button:hover {
-        background-color: #2563eb !important;
-        box-shadow: 0 0 10px rgba(59, 130, 246, 0.5);
     }
 </style>
 """, unsafe_allow_html=True)
 
-# Supabase Credentials
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
@@ -81,7 +72,7 @@ def get_supabase_client():
     if SUPABASE_URL and SUPABASE_KEY:
         try:
             return create_client(SUPABASE_URL, SUPABASE_KEY)
-        except Exception as e:
+        except Exception:
             return None
     return None
 
@@ -89,7 +80,7 @@ supabase = get_supabase_client()
 exchange = ccxt.kraken({'enableRateLimit': True})
 
 # ==========================================
-# 2. MOTOR DE DATOS Y CONFLUENCIA
+# 2. MOTOR DE DATOS, CONFLUENCIA Y CIERRE
 # ==========================================
 def fetch_market_data(symbol='BTC/USDT', timeframe='15m', limit=100):
     try:
@@ -98,7 +89,6 @@ def fetch_market_data(symbol='BTC/USDT', timeframe='15m', limit=100):
         df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
         df['ema200'] = df['close'].ewm(span=200, adjust=False).mean()
         
-        # ATR 14
         high_low = df['high'] - df['low']
         high_close = (df['high'] - df['close'].shift()).abs()
         low_close = (df['low'] - df['close'].shift()).abs()
@@ -146,6 +136,63 @@ def evaluate_signal(df):
         "ema": ema
     }
 
+def update_open_positions(symbol, current_price):
+    """Monitorea posiciones abiertas y las cierra si tocan TP o SL."""
+    if not supabase:
+        return
+    try:
+        # Obtener posiciones abiertas
+        res = supabase.table("paper_trades").select("*").eq("status", "OPEN").eq("symbol", symbol).execute()
+        open_trades = res.data
+        
+        for trade in open_trades:
+            side = trade['side']
+            entry = float(trade['entry_price'])
+            sl = float(trade['sl'])
+            tp = float(trade['tp'])
+            trade_id = trade['id']
+            
+            closed = False
+            status = "OPEN"
+            pnl_usd = 0.0
+            pnl_pct = 0.0
+            
+            # Evaluación LONG
+            if side == "LONG":
+                if current_price >= tp:
+                    closed = True
+                    status = "CERRADO (TP)"
+                    pnl_pct = 3.0
+                    pnl_usd = 30.0  # Basado en $10 USD de riesgo a ratio 1:2
+                elif current_price <= sl:
+                    closed = True
+                    status = "CERRADO (SL)"
+                    pnl_pct = -1.5
+                    pnl_usd = -15.0
+                    
+            # Evaluación SHORT
+            elif side == "SHORT":
+                if current_price <= tp:
+                    closed = True
+                    status = "CERRADO (TP)"
+                    pnl_pct = 3.0
+                    pnl_usd = 30.0
+                elif current_price >= sl:
+                    closed = True
+                    status = "CERRADO (SL)"
+                    pnl_pct = -1.5
+                    pnl_usd = -15.0
+            
+            if closed:
+                supabase.table("paper_trades").update({
+                    "status": status,
+                    "exit_price": float(current_price),
+                    "pnl_usd": pnl_usd,
+                    "pnl_pct": pnl_pct
+                }).eq("id", trade_id).execute()
+    except Exception as e:
+        pass
+
 def execute_paper_trade(symbol, signal):
     if not supabase:
         return False, "Sin conexión con Supabase"
@@ -183,10 +230,8 @@ def get_paper_trades():
         return []
 
 # ==========================================
-# 3. INTERFAZ GRÁFICA INSTITUCIONAL
+# 3. INTERFAZ GRÁFICA
 # ==========================================
-
-# Top Brand Header
 st.markdown("""
     <div style="display: flex; align-items: center; justify-content: space-between; padding-bottom: 20px; border-bottom: 1px solid #1e293b; margin-bottom: 20px;">
         <div style="display: flex; align-items: center; gap: 12px;">
@@ -219,7 +264,6 @@ timeframe = st.sidebar.selectbox("Temporalidad", ["15m", "1h", "4h"])
 tab1, tab2 = st.tabs(["⚡ Monitor Cuantitativo en Vivo", "📋 Historial de Órdenes & Audit Log"])
 
 with tab1:
-    # Monitor Status Header Cards
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         st.markdown('<div class="status-card"><div class="status-title">ESTADO DEL MOTOR</div><div class="status-value">ONLINE</div><div class="status-sub">↑ Ciclo Activo · 30s</div></div>', unsafe_allow_html=True)
@@ -239,10 +283,12 @@ with tab1:
     if not df.empty:
         signal = evaluate_signal(df)
         
+        # Ejecutar verificación de Take Profit / Stop Loss en posiciones abiertas
+        update_open_positions(symbol, signal['price'])
+        
         col_chart, col_signal = st.columns([2.5, 1])
         
         with col_chart:
-            # Chart Plotly Candlestick (TradingView Style)
             fig = go.Figure()
             fig.add_trace(go.Candlestick(
                 x=df['timestamp'],
@@ -299,6 +345,6 @@ with tab2:
     trades = get_paper_trades()
     if trades:
         trades_df = pd.DataFrame(trades)
-        st.dataframe(trades_df[['order_id', 'timestamp', 'symbol', 'side', 'entry_price', 'sl', 'tp', 'status', 'confluence', 'reason']], use_container_width=True)
+        st.dataframe(trades_df, use_container_width=True)
     else:
         st.info("No hay órdenes guardadas aún en la base de datos.")
