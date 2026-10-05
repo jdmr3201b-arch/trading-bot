@@ -845,11 +845,42 @@ with tab2:
     
     if trades:
         df_trades = pd.DataFrame(trades)
-        st.dataframe(df_trades, use_container_width=True)
+        
+        # Mapeo y orden de columnas para presentación limpia
+        cols_order = ['order_id', 'timestamp', 'symbol', 'side', 'entry_price', 'exit_price', 'sl', 'tp', 'status', 'pnl_usd', 'pnl_pct', 'confluence']
+        df_display = df_trades[[c for c in cols_order if c in df_trades.columns]].copy()
+        
+        st.dataframe(
+            df_display,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "order_id": st.column_config.TextColumn("ID Orden"),
+                "timestamp": st.column_config.TextColumn("Fecha UTC"),
+                "symbol": st.column_config.TextColumn("Par"),
+                "side": st.column_config.TextColumn("Lado"),
+                "entry_price": st.column_config.NumberColumn("Entrada ($)", format="$%.2f"),
+                "exit_price": st.column_config.NumberColumn("Salida ($)", format="$%.2f"),
+                "sl": st.column_config.NumberColumn("Stop Loss", format="$%.2f"),
+                "tp": st.column_config.NumberColumn("Take Profit", format="$%.2f"),
+                "status": st.column_config.TextColumn("Estado"),
+                "pnl_usd": st.column_config.NumberColumn("PnL ($)", format="$%.2f"),
+                "pnl_pct": st.column_config.NumberColumn("PnL (%)", format="%.2f%%"),
+                "confluence": st.column_config.NumberColumn("Confluencia", format="%d%%")
+            }
+        )
     else:
-        st.info("No hay órdenes registradas aún en el sistema.")
+        st.info("No se registran órdenes simuladas aún en la base de datos.")
         
     st.markdown("---")
-    st.markdown("### 📜 SYSTEM LOGS (AUDITORÍA EN TIEMPO REAL)")
-    for log in st.session_state.system_logs:
-        st.text(log)
+    st.markdown("### 📜 AUDIT LOG DEL SISTEMA")
+    
+    if st.session_state.system_logs:
+        logs_html = "".join([f"<div style='font-size: 11px; margin-bottom: 4px; color: #93c5fd;'>{log}</div>" for log in st.session_state.system_logs])
+        st.markdown(f"""
+            <div style="background-color: #0b1120; border: 1px solid #1e293b; padding: 12px; border-radius: 6px; max-height: 250px; overflow-y: auto;">
+                {logs_html}
+            </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.text("Sin registros de eventos en esta sesión.")
