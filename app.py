@@ -120,7 +120,7 @@ export default function App() {
     loadMarketData();
   }, [loadMarketData]);
 
-  // Periodic polling every 35s
+  # Periodic polling every 35s
   useEffect(() => {
     const interval = setInterval(() => {
       loadMarketData();
