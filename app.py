@@ -452,6 +452,10 @@ def normalize_trade_data(trade: dict, operational_capital: float = 1000.0) -> di
     if "CERRADO" in status_str or "CLOSED" in status_str:
         raw_pnl_usd = t.get("pnl_usd")
         raw_pnl_pct = t.get("pnl_pct")
+        side_str = str(t.get("side", "")).upper()
+        
+        entry_price = float(t.get("entry_price") or 0.0)
+        exit_price = float(t.get("exit_price") or 0.0)
         
         try:
             pnl_usd = float(raw_pnl_usd) if raw_pnl_usd is not None else None
@@ -463,38 +467,76 @@ def normalize_trade_data(trade: dict, operational_capital: float = 1000.0) -> di
         except (ValueError, TypeError):
             pnl_pct = None
             
-        is_sl = "SL" in status_str or (pnl_pct is not None and pnl_pct < 0) or (pnl_usd is not None and pnl_usd < 0)
-        is_tp = "TP" in status_str or (pnl_pct is not None and pnl_pct > 0) or (pnl_usd is not None and pnl_usd > 0)
+        is_sl = "SL" in status_str or "STOP" in status_str
+        is_tp = "TP" in status_str or "PROFIT" in status_str
         
-        # Detección del bug del precio unitario del activo:
-        # Si pnl_usd excede el 15% del capital operativo (ej. > $150 para $1000) cuando la gestión
-        # fija -1.5% / +3.0%, o si es nulo / cero con status cerrado.
-        needs_correction = False
-        if pnl_usd is not None:
-            if abs(pnl_usd) > (operational_capital * 0.15):
-                needs_correction = True
-        else:
-            needs_correction = True
+        # Detección inteligente por dirección y precio de salida:
+        # En SHORT: si el precio subió (exit > entry), es pérdida por Stop Loss (-1.5%)
+        # En LONG: si el precio bajó (exit < entry), es pérdida por Stop Loss (-1.5%)
+        if not is_sl and not is_tp and entry_price > 0 and exit_price > 0:
+            if side_str == "SHORT":
+                if exit_price > entry_price:
+                    is_sl = True
+                elif exit_price < entry_price:
+                    is_tp = True
+            elif side_str == "LONG":
+                if exit_price < entry_price:
+                    is_sl = True
+                elif exit_price > entry_price:
+                    is_tp = True
+                    
+        # También si es SHORT y pnl_usd fue guardado positivo erróneamente pero el status decía SL
+        if "SL" in status_str:
+            is_sl = True
+            is_tp = False
             
-        if needs_correction:
-            if is_sl:
-                t["pnl_pct"] = -1.5
-                t["pnl_usd"] = -1.0 * round(operational_capital * 0.015, 2)
-            elif is_tp:
-                t["pnl_pct"] = 3.0
-                t["pnl_usd"] = round(operational_capital * 0.030, 2)
+        if is_sl:
+            # STOP LOSS: SIEMPRE NEGATIVO OBLIGATORIO (-1.5% y -$15.00 USD para base $1,000)
+            # Corrige de forma definitiva cualquier cierre SHORT o LONG con SL
+            t["status"] = "CERRADO (SL)"
+            fixed_pct = -1.0 * abs(pnl_pct if (pnl_pct is not None and pnl_pct != 0) else 1.5)
+            # Pérdida en USD siempre estrictamente negativa
+            if pnl_usd is None or pnl_usd >= 0 or abs(pnl_usd) > (operational_capital * 0.15):
+                fixed_usd = -1.0 * round(operational_capital * (abs(fixed_pct) / 100.0), 2)
+            else:
+                fixed_usd = -1.0 * abs(pnl_usd)
+                
+            t["pnl_pct"] = round(fixed_pct, 2)
+            t["pnl_usd"] = round(fixed_usd, 2)
+            
+        elif is_tp:
+            # TAKE PROFIT: SIEMPRE POSITIVO (+3.0% y +$30.00 USD para base $1,000)
+            t["status"] = "CERRADO (TP)"
+            fixed_pct = abs(pnl_pct if (pnl_pct is not None and pnl_pct != 0) else 3.0)
+            if pnl_usd is None or pnl_usd <= 0 or abs(pnl_usd) > (operational_capital * 0.15):
+                fixed_usd = round(operational_capital * (fixed_pct / 100.0), 2)
+            else:
+                fixed_usd = abs(pnl_usd)
+                
+            t["pnl_pct"] = round(fixed_pct, 2)
+            t["pnl_usd"] = round(fixed_usd, 2)
+            
         else:
-            if pnl_usd is not None:
-                t["pnl_usd"] = round(pnl_usd, 2)
-            if pnl_pct is not None:
-                t["pnl_pct"] = round(pnl_pct, 2)
+            # Estado cerrado genérico
+            if pnl_usd is not None and abs(pnl_usd) > (operational_capital * 0.15):
+                if (pnl_pct is not None and pnl_pct < 0) or pnl_usd < 0:
+                    t["pnl_pct"] = -1.5
+                    t["pnl_usd"] = -1.0 * round(operational_capital * 0.015, 2)
+                else:
+                    t["pnl_pct"] = 3.0
+                    t["pnl_usd"] = round(operational_capital * 0.030, 2)
+            else:
+                if pnl_usd is not None:
+                    t["pnl_usd"] = round(pnl_usd, 2)
+                if pnl_pct is not None:
+                    t["pnl_pct"] = round(pnl_pct, 2)
                 
     return t
 
 def fix_and_normalize_supabase_trades(operational_capital: float = 1000.0) -> int:
     """
     Función de utilidad activa para limpiar y normalizar en Supabase todos los registros
-    con PnL erróneos de -$1200 USD generados por el bug de precio unitario.
+    con PnL erróneos (ej. -$1200 USD por precio de activo o cierres SL con valor positivo).
     """
     fixed_count = 0
     # 1. Normalizar memoria de sesión
@@ -518,7 +560,16 @@ def fix_and_normalize_supabase_trades(operational_capital: float = 1000.0) -> in
                         except Exception:
                             pnl_val = 0.0
                             
-                        if abs(pnl_val) > (operational_capital * 0.15) or pnl_val == 0.0:
+                        # Detectar si requiere corrección:
+                        # 1) Si es CERRADO (SL) pero tiene PnL positivo >= 0 (bug SHORT SL positivo)
+                        # 2) Si excede 15% del capital operativo (bug -$1200 USD)
+                        needs_fix = False
+                        if "SL" in status and pnl_val >= 0:
+                            needs_fix = True
+                        elif abs(pnl_val) > (operational_capital * 0.15) or pnl_val == 0.0:
+                            needs_fix = True
+                            
+                        if needs_fix:
                             cleaned = normalize_trade_data(record, operational_capital)
                             update_payload = {
                                 "pnl_usd": float(cleaned["pnl_usd"]),
@@ -534,7 +585,7 @@ def fix_and_normalize_supabase_trades(operational_capital: float = 1000.0) -> in
         except Exception as e:
             add_log(f"Aviso al sanear Supabase: {str(e)}", "WARN")
             
-    add_log(f"Normalización completada: {fixed_count} órdenes corregidas con riesgo institucional.", "SUCCESS")
+    add_log(f"Normalización completada: {fixed_count} órdenes corregidas con riesgo institucional y signo estricto.", "SUCCESS")
     return fixed_count
 
 def reset_all_trades_supabase() -> bool:
@@ -759,13 +810,22 @@ def evaluate_and_close_open_positions(operational_capital: float = 1000.0):
                 status = "CERRADO (TP)"
                 pnl_pct = 3.0
                 pnl_usd = pos_capital * 0.030
-            elif current_price <= sl:
+            elif current_price >= sl:
                 closed = True
                 status = "CERRADO (SL)"
                 pnl_pct = -1.5
                 pnl_usd = -1.0 * (pos_capital * 0.015)
         
         if closed:
+            # Validación estricta de signo institucional:
+            # Todo cierre por Stop Loss (LONG o SHORT) DEBE ser estrictamente negativo (-$15.00 USD)
+            if "SL" in status:
+                pnl_pct = -1.0 * abs(float(pnl_pct if pnl_pct != 0 else 1.5))
+                pnl_usd = -1.0 * abs(float(pnl_usd if pnl_usd != 0 else (pos_capital * 0.015)))
+            elif "TP" in status:
+                pnl_pct = abs(float(pnl_pct if pnl_pct != 0 else 3.0))
+                pnl_usd = abs(float(pnl_usd if pnl_usd != 0 else (pos_capital * 0.030)))
+                
             # Tipos nativos de Python para evitar fallos de serialización PostgREST
             clean_status = str(status)
             clean_exit_price = float(round(float(current_price), 4))
@@ -1426,6 +1486,36 @@ with tab_history:
                 
         df_display = df_trades[essential_cols].copy()
         
+        # Validación estricta final y formateo explícito (-$15.00 USD en Stop Loss)
+        def format_pnl_usd_label(row):
+            st_val = str(row.get('status', '')).upper()
+            val = row.get('pnl_usd')
+            try:
+                num = float(val) if val is not None else 0.0
+            except Exception:
+                num = 0.0
+            if 'SL' in st_val or num < 0:
+                return f"-${abs(num if num != 0 else (capital * 0.015)):.2f} USD"
+            elif 'TP' in st_val or num > 0:
+                return f"+${abs(num if num != 0 else (capital * 0.030)):.2f} USD"
+            return "$0.00 USD"
+
+        def format_pnl_pct_label(row):
+            st_val = str(row.get('status', '')).upper()
+            val = row.get('pnl_pct')
+            try:
+                num = float(val) if val is not None else 0.0
+            except Exception:
+                num = 0.0
+            if 'SL' in st_val or num < 0:
+                return f"-{abs(num if num != 0 else 1.5):.2f}%"
+            elif 'TP' in st_val or num > 0:
+                return f"+{abs(num if num != 0 else 3.0):.2f}%"
+            return "0.00%"
+
+        df_display['pnl_usd'] = df_display.apply(format_pnl_usd_label, axis=1)
+        df_display['pnl_pct'] = df_display.apply(format_pnl_pct_label, axis=1)
+        
         st.dataframe(
             df_display,
             use_container_width=True,
@@ -1436,8 +1526,8 @@ with tab_history:
                 "side": st.column_config.TextColumn("Tipo (Side)"),
                 "entry_price": st.column_config.NumberColumn("Precio Entrada", format="$%.4f"),
                 "exit_price": st.column_config.NumberColumn("Precio Cierre", format="$%.4f"),
-                "pnl_usd": st.column_config.NumberColumn("Ganancia ($ USD)", format="$%.2f"),
-                "pnl_pct": st.column_config.NumberColumn("Ganancia (%)", format="%.2f%%"),
+                "pnl_usd": st.column_config.TextColumn("Ganancia ($ USD)"),
+                "pnl_pct": st.column_config.TextColumn("Ganancia (%)"),
                 "status": st.column_config.TextColumn("Estado")
             }
         )
