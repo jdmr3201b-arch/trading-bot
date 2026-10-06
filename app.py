@@ -1,9 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-PROYECTO DIPPER | Quant Terminal v2.6 (Kraken USD Native Engine)
+PROYECTO DIPPER | Quant Terminal v2.7 (Risk-Managed PnL & Supabase Healing Engine)
 Terminal Autónomo de Trading Cuantitativo
 Escaneo: 18 Criptomonedas Kraken Spot Nativas en USD
-Gestión de Riesgo: Límite de 3 Posiciones Concurrentes, Firewall Diario (-3%), TP/SL Dinámico
+Gestión de Riesgo:
+  - Límite de 3 Posiciones Concurrentes (Máx 1 por par)
+  - Cálculo estricto de PnL en $ USD sobre Capital de Posición / Operativo
+  - Take Profit: +3.0% (+$30.00 USD para base $1,000)
+  - Stop Loss: -1.5% (-$15.00 USD para base $1,000)
+  - Recalculador de Balance / Equity: Capital Inicial + SUMA(PnL_USD de trades cerrados)
+  - Normalizador y Saneador de Registros Históricos de Supabase
+  - Firewall Diario (-3.0% Circuit Breaker)
 Stack: Python 3.10+, Streamlit, CCXT (Kraken Spot REST), Supabase (PostgreSQL), Plotly
 Despliegue: Render / Streamlit Cloud
 """
@@ -263,7 +270,6 @@ def get_kraken_exchange():
     try:
         ex.load_markets()
     except Exception as e:
-        # Si falla la carga inicial de mercados, continuará con resolución bajo demanda
         pass
     return ex
 
@@ -339,10 +345,8 @@ def fetch_market_data(symbol='BTC/USD', timeframe='15m', limit=50):
             return df
         return pd.DataFrame()
     except ccxt.BadSymbol:
-        # Captura específica de símbolo inexistente en Kraken sin inundar el Audit Log
         return pd.DataFrame()
     except Exception as e:
-        # Fallo de red o timeout controlado
         return pd.DataFrame()
 
 # ==========================================
@@ -426,111 +430,227 @@ def evaluate_macro_filter(df: pd.DataFrame, force_status: str = "AUTO"):
     
     return True, "ACTIVO (Ventana Segura)"
 
-# ==========================================
-# 7. GESTIÓN DE BASE DE DATOS Y OPERACIONES
-# ==========================================
-def fetch_all_trades_supabase():
-    """Recupera órdenes legítimas desde Supabase o memoria de sesión."""
+# =========================================================================
+# 7. NORMALIZACIÓN, LIMPIEZA DE PNL Y GESTIÓN DE BASE DE DATOS
+# =========================================================================
+def normalize_trade_data(trade: dict, operational_capital: float = 1000.0) -> dict:
+    """
+    Normaliza y sanea los registros de trading.
+    Corrige anomalías históricas donde el PnL en $ USD se calculó erróneamente sobre el
+    precio unitario del par (ej. -$1,275 USD por BTC a $85,000) en lugar del capital operativo.
+    Regla estricta institucional:
+      - Stop Loss (-1.5%): PnL_USD = -1.0 * (capital_operativo * 0.015)  [ej. -$15.00 USD para $1000]
+      - Take Profit (+3.0%): PnL_USD = capital_operativo * 0.030         [ej. +$30.00 USD para $1000]
+    """
+    if not isinstance(trade, dict):
+        return trade
+        
+    t = dict(trade)
+    status_str = str(t.get("status", "")).upper()
+    
+    # Solo procesamos órdenes cerradas
+    if "CERRADO" in status_str or "CLOSED" in status_str:
+        raw_pnl_usd = t.get("pnl_usd")
+        raw_pnl_pct = t.get("pnl_pct")
+        
+        try:
+            pnl_usd = float(raw_pnl_usd) if raw_pnl_usd is not None else None
+        except (ValueError, TypeError):
+            pnl_usd = None
+            
+        try:
+            pnl_pct = float(raw_pnl_pct) if raw_pnl_pct is not None else None
+        except (ValueError, TypeError):
+            pnl_pct = None
+            
+        is_sl = "SL" in status_str or (pnl_pct is not None and pnl_pct < 0) or (pnl_usd is not None and pnl_usd < 0)
+        is_tp = "TP" in status_str or (pnl_pct is not None and pnl_pct > 0) or (pnl_usd is not None and pnl_usd > 0)
+        
+        # Detección del bug del precio unitario del activo:
+        # Si pnl_usd excede el 15% del capital operativo (ej. > $150 para $1000) cuando la gestión
+        # fija -1.5% / +3.0%, o si es nulo / cero con status cerrado.
+        needs_correction = False
+        if pnl_usd is not None:
+            if abs(pnl_usd) > (operational_capital * 0.15):
+                needs_correction = True
+        else:
+            needs_correction = True
+            
+        if needs_correction:
+            if is_sl:
+                t["pnl_pct"] = -1.5
+                t["pnl_usd"] = -1.0 * round(operational_capital * 0.015, 2)
+            elif is_tp:
+                t["pnl_pct"] = 3.0
+                t["pnl_usd"] = round(operational_capital * 0.030, 2)
+        else:
+            if pnl_usd is not None:
+                t["pnl_usd"] = round(pnl_usd, 2)
+            if pnl_pct is not None:
+                t["pnl_pct"] = round(pnl_pct, 2)
+                
+    return t
+
+def fix_and_normalize_supabase_trades(operational_capital: float = 1000.0) -> int:
+    """
+    Función de utilidad activa para limpiar y normalizar en Supabase todos los registros
+    con PnL erróneos de -$1200 USD generados por el bug de precio unitario.
+    """
+    fixed_count = 0
+    # 1. Normalizar memoria de sesión
+    for i, t in enumerate(st.session_state.local_paper_trades):
+        cleaned = normalize_trade_data(t, operational_capital)
+        if cleaned != t:
+            st.session_state.local_paper_trades[i] = cleaned
+            fixed_count += 1
+            
+    # 2. Normalizar base de datos Supabase
+    if supabase_client:
+        try:
+            res = supabase_client.table("paper_trades").select("*").execute()
+            if res.data:
+                for record in res.data:
+                    status = str(record.get("status", "")).upper()
+                    if "CERRADO" in status or "CLOSED" in status:
+                        raw_pnl = record.get("pnl_usd")
+                        try:
+                            pnl_val = float(raw_pnl) if raw_pnl is not None else 0.0
+                        except Exception:
+                            pnl_val = 0.0
+                            
+                        if abs(pnl_val) > (operational_capital * 0.15) or pnl_val == 0.0:
+                            cleaned = normalize_trade_data(record, operational_capital)
+                            update_payload = {
+                                "pnl_usd": float(cleaned["pnl_usd"]),
+                                "pnl_pct": float(cleaned["pnl_pct"])
+                            }
+                            rec_id = record.get("id")
+                            rec_order_id = record.get("order_id")
+                            if rec_id is not None:
+                                supabase_client.table("paper_trades").update(update_payload).eq("id", rec_id).execute()
+                            elif rec_order_id is not None:
+                                supabase_client.table("paper_trades").update(update_payload).eq("order_id", str(rec_order_id)).execute()
+                            fixed_count += 1
+        except Exception as e:
+            add_log(f"Aviso al sanear Supabase: {str(e)}", "WARN")
+            
+    add_log(f"Normalización completada: {fixed_count} órdenes corregidas con riesgo institucional.", "SUCCESS")
+    return fixed_count
+
+def reset_all_trades_supabase() -> bool:
+    """Resetea el historial de órdenes para reiniciar el terminal limpiamente."""
+    st.session_state.local_paper_trades = []
+    if supabase_client:
+        try:
+            supabase_client.table("paper_trades").delete().neq("id", -999999).execute()
+            add_log("Base de datos de paper_trades reseteada en Supabase.", "WARN")
+            return True
+        except Exception as e:
+            add_log(f"Error reseteando Supabase: {str(e)}", "ERROR")
+            return False
+    return True
+
+def fetch_all_trades_supabase(operational_capital: float = 1000.0):
+    """Recupera órdenes legítimas desde Supabase o memoria local, aplicando normalización de datos."""
+    trades_raw = []
     if supabase_client:
         try:
             res = supabase_client.table("paper_trades").select("*").order("timestamp", desc=True).execute()
             if res.data is not None:
-                return res.data
+                trades_raw = res.data
         except Exception as e:
             add_log(f"Error consultando Supabase: {str(e)}", "ERROR")
-    return st.session_state.local_paper_trades
+            trades_raw = st.session_state.local_paper_trades
+    else:
+        trades_raw = st.session_state.local_paper_trades
 
-def get_all_open_positions():
+    # Sanitizar automáticamente cada registro contra el bug de precio unitario
+    return [normalize_trade_data(t, operational_capital) for t in trades_raw]
+
+def get_all_open_positions(operational_capital: float = 1000.0):
     """Retorna todas las posiciones actualmente abiertas (OPEN) en el portafolio."""
-    all_trades = fetch_all_trades_supabase()
+    all_trades = fetch_all_trades_supabase(operational_capital)
     return [t for t in all_trades if str(t.get("status", "")).upper() == "OPEN"]
 
-def check_existing_open_position_for_symbol(symbol: str):
-    """Verifica si ya existe una posición abierta para el par específico."""
-    open_positions = get_all_open_positions()
+def check_existing_open_position_for_symbol(symbol: str, operational_capital: float = 1000.0):
+    """Verifica si ya existe una posición abierta para el par específico (Máximo 1 por par)."""
+    open_positions = get_all_open_positions(operational_capital)
     for t in open_positions:
         if t.get("symbol") == symbol:
             return True, t
     return False, None
 
-# ==========================================
-# 8. BALANCE Y RESUMEN SEMANAL DE CAPITAL
-# ==========================================
-def fetch_weekly_closed_trades_supabase():
+# =========================================================================
+# 8. RECALCULADOR DE BALANCE / EQUITY Y RESUMEN SEMANAL DE CAPITAL
+# =========================================================================
+def calculate_weekly_capital_metrics(initial_capital: float = 1000.0):
+    """
+    Recalculador integral de Balance y Equity según especificaciones exactas:
+      - Capital Actual (Equity) = Capital Inicial + SUMA(PnL_USD de trades cerrados)
+      - PnL Semanal ($ y %) = Rendimiento acumulado de trades cerrados en los últimos 7 días
+      - Win Rate (% de acierto) = Victorias / Total cerrados en la ventana semanal
+    """
+    all_trades = fetch_all_trades_supabase(operational_capital=initial_capital)
+    
+    # 1. Todas las operaciones cerradas históricas
+    all_closed_trades = [
+        t for t in all_trades 
+        if "CERRADO" in str(t.get("status", "")).upper() or "CLOSED" in str(t.get("status", "")).upper()
+    ]
+    
+    # SUMA exacta del PnL en $ USD de todos los trades cerrados legítimos
+    total_closed_pnl_usd = sum(float(t.get("pnl_usd", 0.0) or 0.0) for t in all_closed_trades)
+    
+    # REGLA 2: Capital Actual (Equity) = Capital Inicial + SUMA(PnL_USD de trades cerrados)
+    current_equity = initial_capital + total_closed_pnl_usd
+    total_pnl_pct = (total_closed_pnl_usd / initial_capital * 100.0) if initial_capital > 0 else 0.0
+    
+    # 2. Filtrado de operaciones cerradas de los últimos 7 días
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     seven_days_ago = now_utc - datetime.timedelta(days=7)
-    seven_days_ago_iso = seven_days_ago.isoformat()
     
-    if supabase_client:
-        try:
-            res = supabase_client.table("paper_trades") \
-                .select("*") \
-                .ilike("status", "%CERRADO%") \
-                .gte("timestamp", seven_days_ago_iso) \
-                .order("timestamp", desc=True) \
-                .execute()
-            if res.data is not None and len(res.data) > 0:
-                return res.data
-        except Exception as e:
-            pass
-    
-    all_trades = fetch_all_trades_supabase()
-    weekly_trades = []
-    
-    for t in all_trades:
-        status = str(t.get("status", "")).upper()
-        if "CERRADO" in status or "CLOSED" in status:
-            raw_ts = t.get("timestamp")
-            trade_dt = None
-            if raw_ts:
-                try:
-                    if isinstance(raw_ts, str):
-                        ts_clean = raw_ts.replace("Z", "+00:00")
-                        trade_dt = datetime.datetime.fromisoformat(ts_clean)
-                    elif isinstance(raw_ts, (int, float)):
-                        trade_dt = datetime.datetime.fromtimestamp(raw_ts, tz=datetime.timezone.utc)
-                except Exception:
-                    trade_dt = now_utc
-            else:
+    weekly_closed_trades = []
+    for t in all_closed_trades:
+        raw_ts = t.get("timestamp")
+        trade_dt = None
+        if raw_ts:
+            try:
+                if isinstance(raw_ts, str):
+                    ts_clean = raw_ts.replace("Z", "+00:00")
+                    trade_dt = datetime.datetime.fromisoformat(ts_clean)
+                elif isinstance(raw_ts, (int, float)):
+                    trade_dt = datetime.datetime.fromtimestamp(raw_ts, tz=datetime.timezone.utc)
+            except Exception:
                 trade_dt = now_utc
+        else:
+            trade_dt = now_utc
             
-            if trade_dt:
-                if trade_dt.tzinfo is None:
-                    trade_dt = trade_dt.replace(tzinfo=datetime.timezone.utc)
-                if trade_dt >= seven_days_ago:
-                    weekly_trades.append(t)
-                    
-    return weekly_trades
-
-def calculate_weekly_capital_metrics(initial_capital: float = 1000.0):
-    weekly_closed_trades = fetch_weekly_closed_trades_supabase()
+        if trade_dt:
+            if trade_dt.tzinfo is None:
+                trade_dt = trade_dt.replace(tzinfo=datetime.timezone.utc)
+            if trade_dt >= seven_days_ago:
+                weekly_closed_trades.append(t)
+                
+    weekly_pnl_usd = sum(float(t.get("pnl_usd", 0.0) or 0.0) for t in weekly_closed_trades)
+    winning_trades = sum(1 for t in weekly_closed_trades if float(t.get("pnl_usd", 0.0) or 0.0) > 0)
+    losing_trades = sum(1 for t in weekly_closed_trades if float(t.get("pnl_usd", 0.0) or 0.0) < 0)
+    total_closed_weekly = len(weekly_closed_trades)
     
-    weekly_pnl_usd = 0.0
-    winning_trades = 0
-    losing_trades = 0
-    total_closed = len(weekly_closed_trades)
-    
-    for trade in weekly_closed_trades:
-        pnl = float(trade.get("pnl_usd") or 0.0)
-        weekly_pnl_usd += pnl
-        if pnl > 0:
-            winning_trades += 1
-        elif pnl < 0:
-            losing_trades += 1
-            
-    current_equity = initial_capital + weekly_pnl_usd
     weekly_pnl_pct = (weekly_pnl_usd / initial_capital * 100.0) if initial_capital > 0 else 0.0
-    win_rate = (winning_trades / total_closed * 100.0) if total_closed > 0 else 0.0
+    win_rate = (winning_trades / total_closed_weekly * 100.0) if total_closed_weekly > 0 else 0.0
     
     return {
         "initial_capital": initial_capital,
         "current_equity": current_equity,
+        "total_closed_pnl_usd": total_closed_pnl_usd,
+        "total_pnl_pct": total_pnl_pct,
         "weekly_pnl_usd": weekly_pnl_usd,
         "weekly_pnl_pct": weekly_pnl_pct,
         "win_rate": win_rate,
         "winning_trades": winning_trades,
         "losing_trades": losing_trades,
-        "total_closed": total_closed,
+        "total_closed": total_closed_weekly,
+        "all_closed_count": len(all_closed_trades),
         "trades": weekly_closed_trades
     }
 
@@ -541,13 +661,13 @@ def calculate_daily_firewall(capital: float, max_loss_pct: float = 3.0):
     today_utc = datetime.datetime.now(datetime.timezone.utc).date()
     max_allowed_loss_usd = -1.0 * abs(capital * (max_loss_pct / 100.0))
     
-    all_trades = fetch_all_trades_supabase()
+    all_trades = fetch_all_trades_supabase(operational_capital=capital)
     daily_pnl_usd = 0.0
     daily_trades_count = 0
     
     for t in all_trades:
         status = str(t.get("status", "")).upper()
-        if "CERRADO" in status:
+        if "CERRADO" in status or "CLOSED" in status:
             raw_ts = t.get("timestamp")
             if raw_ts:
                 try:
@@ -578,19 +698,21 @@ def calculate_daily_firewall(capital: float, max_loss_pct: float = 3.0):
     }
 
 # =========================================================================
-# 10. EVALUACIÓN Y CIERRE DE POSICIONES OPEN (SINCRONIZADO POR SÍMBOLO)
+# 10. EVALUACIÓN Y CIERRE DE POSICIONES OPEN (GESTIÓN DE RIESGO ESTRICTA)
 # =========================================================================
-def evaluate_and_close_open_positions():
+def evaluate_and_close_open_positions(operational_capital: float = 1000.0):
     """
     Monitorea de forma iterativa todas las posiciones OPEN en el portafolio.
     Consulta el precio en vivo del par EXACTO correspondiente a cada orden.
     Ejecuta salidas automáticas por Take Profit (+3.0%) o Stop Loss (-1.5%).
+    REGLA ESTRICTA DE PNL:
+      - Stop Loss (-1.5%): PnL_USD = -1 * (capital_operativo * 0.015) [ej. -$15.00 USD]
+      - Take Profit (+3.0%): PnL_USD = capital_operativo * 0.030     [ej. +$30.00 USD]
+      - NUNCA se multiplica por el precio unitario del activo (ej. $85,000 de BTC).
     """
-    open_positions = get_all_open_positions()
+    open_positions = get_all_open_positions(operational_capital)
     if not open_positions:
         return
-    
-    now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     
     for trade in open_positions:
         sym = trade.get("symbol", "BTC/USD")
@@ -598,9 +720,14 @@ def evaluate_and_close_open_positions():
         order_id = trade.get("order_id", f"DIP-{trade_id}")
         side = trade.get("side", "LONG")
         entry_price = float(trade.get("entry_price", 0.0))
-        sl = float(trade.get("sl", entry_price * 0.985))
-        tp = float(trade.get("tp", entry_price * 1.030))
+        sl = float(trade.get("sl", entry_price * 0.985 if side == "LONG" else entry_price * 1.015))
+        tp = float(trade.get("tp", entry_price * 1.030 if side == "LONG" else entry_price * 0.970))
         
+        # Capital asignado a la posición (por defecto el capital operativo del terminal)
+        pos_capital = float(trade.get("capital") or trade.get("position_size_usd") or operational_capital)
+        if pos_capital <= 0:
+            pos_capital = operational_capital
+            
         # Consulta de precio en vivo del par exacto de la orden
         df_sym = fetch_market_data(sym, limit=10)
         if df_sym.empty:
@@ -617,33 +744,35 @@ def evaluate_and_close_open_positions():
                 closed = True
                 status = "CERRADO (TP)"
                 pnl_pct = 3.0
-                pnl_usd = entry_price * 0.030 if entry_price > 0 else 30.0
+                # Ganancia exacta: +3.0% del capital operativo
+                pnl_usd = pos_capital * 0.030
             elif current_price <= sl:
                 closed = True
                 status = "CERRADO (SL)"
                 pnl_pct = -1.5
-                pnl_usd = -1.0 * (entry_price * 0.015) if entry_price > 0 else -15.0
+                # Pérdida exacta: -1.5% del capital operativo
+                pnl_usd = -1.0 * (pos_capital * 0.015)
                 
         elif side == "SHORT":
             if current_price <= tp:
                 closed = True
                 status = "CERRADO (TP)"
                 pnl_pct = 3.0
-                pnl_usd = entry_price * 0.030 if entry_price > 0 else 30.0
+                pnl_usd = pos_capital * 0.030
             elif current_price <= sl:
                 closed = True
                 status = "CERRADO (SL)"
                 pnl_pct = -1.5
-                pnl_usd = -1.0 * (entry_price * 0.015) if entry_price > 0 else -15.0
+                pnl_usd = -1.0 * (pos_capital * 0.015)
         
         if closed:
-            # Tipos nativos de Python para evitar errores de serialización JSON/PostgREST
+            # Tipos nativos de Python para evitar fallos de serialización PostgREST
             clean_status = str(status)
             clean_exit_price = float(round(float(current_price), 4))
             clean_pnl_usd = float(round(float(pnl_usd), 2))
             clean_pnl_pct = float(round(float(pnl_pct), 2))
             
-            # Payload compatible con el esquema de Supabase: columnas validas unicamente
+            # Payload compatible con el esquema de Supabase: columnas válidas únicamente (SIN closed_at)
             update_payload = {
                 "status": clean_status,
                 "exit_price": clean_exit_price,
@@ -659,8 +788,6 @@ def evaluate_and_close_open_positions():
                     else:
                         query.eq("order_id", str(order_id)).execute()
                 except Exception as e_up:
-                    err_msg = str(e_up)
-                    # Si la columna en Supabase tiene nombres alternativos (ej: pnl o estado)
                     try:
                         fallback_payload = {
                             "status": clean_status,
@@ -701,12 +828,12 @@ def execute_autotrigger(symbol: str, signal: dict, is_firewall_locked: bool, is_
         return False, "AUTOTRIGGER BLOQUEADO: Filtro Macro detecta volatilidad extrema."
         
     # REGLA 1: MÁXIMO 3 POSICIONES CONCURRENTES
-    all_open = get_all_open_positions()
+    all_open = get_all_open_positions(capital_base)
     if len(all_open) >= MAX_CONCURRENT_POSITIONS:
         return False, f"Límite de posiciones concurrentes alcanzado (Máximo {MAX_CONCURRENT_POSITIONS} abiertas)"
         
     # REGLA 2: MÁXIMO 1 POSICIÓN POR PAR
-    has_symbol_open, existing_order = check_existing_open_position_for_symbol(symbol)
+    has_symbol_open, existing_order = check_existing_open_position_for_symbol(symbol, capital_base)
     if has_symbol_open:
         order_code = existing_order.get("order_id", "N/A")
         return False, f"Ya existe una posición abierta ({order_code}) para {symbol} (Máximo 1 por par)"
@@ -780,22 +907,20 @@ def scan_all_18_watchlist():
     return scan_results
 
 # ==========================================
-# 13. INTERFAZ GRÁFICA BLOOMBERG TERMINAL
+# 13. ENCABEZADO Y SIDEBAR INSTITUCIONAL
 # ==========================================
-
-# ENCABEZADO PRINCIPAL
 st.markdown("""
-<div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 0 16px 0; border-bottom: 1px solid #1e293b; margin-bottom: 16px; flex-wrap: wrap; gap: 10px;">
-    <div style="display: flex; align-items: center; gap: 10px;">
+<div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1e293b; padding-bottom: 12px; margin-bottom: 16px;">
+    <div style="display: flex; align-items: center; gap: 12px;">
         <span style="font-size: 26px; line-height: 1;">⚡</span>
         <div>
             <div style="display: flex; align-items: center; gap: 8px;">
                 <span style="font-size: 19px; font-weight: 800; color: #f8fafc; letter-spacing: 1px;">PROYECTO DIPPER</span>
-                <span style="background: #1e293b; color: #38bdf8; font-size: 10px; padding: 3px 8px; border-radius: 4px; font-weight: 700; border: 1px solid #334155;">QUANT TERMINAL v2.6</span>
+                <span style="background: #1e293b; color: #38bdf8; font-size: 10px; padding: 3px 8px; border-radius: 4px; font-weight: 700; border: 1px solid #334155;">QUANT TERMINAL v2.7</span>
                 <span class="badge-auto">KRAKEN USD NATIVO · MÁX 3 OPEN</span>
             </div>
             <div style="font-size: 11px; color: #64748b; margin-top: 2px;">
-                MOTOR MULTIACTIVO DE TRADING CUANTITATIVO · KRAKEN SPOT USD · SUPABASE POSTGRESQL
+                MOTOR MULTIACTIVO DE TRADING CUANTITATIVO · GESTIÓN ESTRICTA DE PNL USD · SUPABASE POSTGRESQL
             </div>
         </div>
     </div>
@@ -827,7 +952,7 @@ with st.sidebar:
             <div class="metric-label">Límite de Posiciones Concurrentes</div>
             <div class="metric-num" style="color: #38bdf8;">MÁXIMO 3 ABIERTAS</div>
             <div class="metric-label" style="margin-top: 6px;">Riesgo / Posición (-1.5% SL)</div>
-            <div class="metric-num" style="color: #ef4444;">${capital * 0.015:.2f} USD</div>
+            <div class="metric-num" style="color: #ef4444;">-${capital * 0.015:.2f} USD</div>
             <div class="metric-label" style="margin-top: 6px;">Beneficio Fijo / Posición (+3.0% TP)</div>
             <div class="metric-num" style="color: #10b981;">+${capital * 0.030:.2f} USD</div>
             <div class="metric-label" style="margin-top: 6px;">Circuit Breaker Diario (-3.0%)</div>
@@ -858,29 +983,27 @@ if auto_refresh_enabled:
     """, unsafe_allow_html=True)
 
 # EJECUCIÓN DEL CICLO EN TIEMPO REAL
-# 1. Monitoreo y cierre de posiciones OPEN activas (sincronizadas por su par respectivo)
-evaluate_and_close_open_positions()
+# 1. Monitoreo y cierre de posiciones OPEN activas con cálculo estricto de PnL sobre el capital operativo
+evaluate_and_close_open_positions(operational_capital=capital)
 
 # 2. Obtención de datos del par en inspección
 df_inspected = fetch_market_data(selected_symbol, timeframe, limit=50)
-current_price_inspected = float(df_inspected.iloc[-1]['close']) if not df_inspected.empty else 0.0
 signal_inspected = evaluate_confluence(df_inspected)
 is_macro_safe, macro_status_str = evaluate_macro_filter(df_inspected, macro_override)
 
 # 3. Estado de Firewall y Portafolio
 firewall = calculate_daily_firewall(capital, max_loss_pct=3.0)
 is_circuit_breaker = firewall["is_circuit_breaker"]
-open_positions = get_all_open_positions()
+open_positions = get_all_open_positions(operational_capital=capital)
 open_positions_count = len(open_positions)
 
 # 4. Escaneo automático y posible ejecución de Autotrigger
 scanner_data = scan_all_18_watchlist()
 
-# Si hay confluencia en algún par y espacio en portafolio (< 3), evaluar gatillo
 if not is_circuit_breaker and is_macro_safe and open_positions_count < MAX_CONCURRENT_POSITIONS:
     for asset in scanner_data:
         if asset["score"] >= 75 and asset["side"] in ["LONG", "SHORT"]:
-            has_pos, _ = check_existing_open_position_for_symbol(asset["symbol"])
+            has_pos, _ = check_existing_open_position_for_symbol(asset["symbol"], capital)
             if not has_pos:
                 executed, msg = execute_autotrigger(asset["symbol"], asset, is_circuit_breaker, is_macro_safe, capital)
                 if executed:
@@ -892,7 +1015,7 @@ if not is_circuit_breaker and is_macro_safe and open_positions_count < MAX_CONCU
 # =========================================================================
 if is_circuit_breaker:
     st.error(
-        f"🛑 **ACCION REQUERIDA**: Circuit Breaker Diario activado por Drawdown (-3.0% alcanzado: ${firewall['daily_pnl_usd']:.2f} USD). "
+        f"🛑 **ACCIÓN REQUERIDA**: Circuit Breaker Diario activado por Drawdown (-3.0% alcanzado: ${firewall['daily_pnl_usd']:.2f} USD). "
         "Por protocolo institucional estricto, las nuevas entradas están BLOQUEADAS hasta el siguiente ciclo UTC."
     )
 elif not is_macro_safe:
@@ -943,17 +1066,17 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # =========================================================================
-# PANEL DE MÉTRICAS FINANCIERAS (KPIS) EN LA PARTE SUPERIOR
+# PANEL DE BALANCE Y RESUMEN SEMANAL DE CAPITAL (RECALCULADOR EXACTO)
 # =========================================================================
 weekly_kpis = calculate_weekly_capital_metrics(initial_capital=capital)
 
 st.markdown("""
 <div style="margin-top: 10px; margin-bottom: 8px; font-size: 13px; font-weight: 800; color: #f8fafc; letter-spacing: 0.8px; display: flex; align-items: center; justify-content: space-between;">
     <div style="display: flex; align-items: center; gap: 8px;">
-        <span>💼</span> PANEL DE BALANCE Y RESUMEN SEMANAL DE CAPITAL (ÚLTIMOS 7 DÍAS)
+        <span>💼</span> PANEL DE BALANCE Y RESUMEN DE CAPITAL (RECALCULADOR INSTITUCIONAL)
     </div>
     <div style="font-size: 11px; color: #64748b;">
-        Trades Cerrados (7D): <b style="color: #cbd5e1;">""" + str(weekly_kpis["total_closed"]) + """</b>
+        Trades Cerrados: 7D (<b style="color: #cbd5e1;">""" + str(weekly_kpis["total_closed"]) + """</b>) &nbsp;|&nbsp; Total Histórico (<b style="color: #cbd5e1;">""" + str(weekly_kpis["all_closed_count"]) + """</b>)
     </div>
 </div>
 """, unsafe_allow_html=True)
@@ -964,23 +1087,23 @@ with col_kpi1:
     st.metric(
         label="💵 Capital Inicial",
         value=f"${weekly_kpis['initial_capital']:,.2f}",
-        help="Base de capital asignada en la matriz de riesgo del terminal"
+        help="Base de capital operativo asignada en la matriz de riesgo del terminal"
     )
 
 with col_kpi2:
-    equity_delta_color = "normal" if weekly_kpis["weekly_pnl_usd"] >= 0 else "inverse"
+    equity_delta_color = "normal" if weekly_kpis["total_closed_pnl_usd"] >= 0 else "inverse"
     st.metric(
         label="💼 Capital Actual (Equity)",
         value=f"${weekly_kpis['current_equity']:,.2f}",
-        delta=f"${weekly_kpis['weekly_pnl_usd']:+,.2f} ({weekly_kpis['weekly_pnl_pct']:+.2f}%)",
+        delta=f"${weekly_kpis['total_closed_pnl_usd']:+,.2f} ({weekly_kpis['total_pnl_pct']:+.2f}%)",
         delta_color=equity_delta_color,
-        help="Capital neto actual en USD (Capital Inicial + PnL Semanal acumulado)"
+        help="Capital neto actual: Capital Inicial + SUMA(PnL_USD de trades cerrados legítimos)"
     )
 
 with col_kpi3:
     pnl_delta_color = "normal" if weekly_kpis["weekly_pnl_usd"] >= 0 else "inverse"
     st.metric(
-        label="📈 PnL Semanal ($ / %)",
+        label="📈 PnL Semanal (7 Días)",
         value=f"${weekly_kpis['weekly_pnl_usd']:+,.2f}",
         delta=f"{weekly_kpis['weekly_pnl_pct']:+.2f}%",
         delta_color=pnl_delta_color,
@@ -989,11 +1112,11 @@ with col_kpi3:
 
 with col_kpi4:
     win_rate_str = f"{weekly_kpis['win_rate']:.1f}%"
-    record_str = f"{weekly_kpis['winning_trades']}W / {weekly_kpis['losing_trades']}L"
+    record_str = f"{weekly_kpis['winning_trades']}W / {weekly_kpis['losing_trades']}L (7D)"
     st.metric(
         label="🎯 Win Rate (% Acierto)",
         value=win_rate_str,
-        delta=record_str if weekly_kpis['total_closed'] > 0 else "Sin operaciones cerradas",
+        delta=record_str if weekly_kpis['total_closed'] > 0 else "Sin cerradas en 7D",
         help="Porcentaje de operaciones con ganancia neta sobre el total cerrado"
     )
 
@@ -1004,17 +1127,38 @@ st.markdown("<div style='margin-bottom: 16px;'></div>", unsafe_allow_html=True)
 # =========================================================================
 st.markdown("### 📈 CURVA DE CAPITAL (EQUITY CURVE) & RENDIMIENTO EN VIVO")
 
-all_trades = fetch_all_trades_supabase()
-closed_trades = [t for t in all_trades if "CERRADO" in str(t.get("status", "")).upper()]
+all_trades_normalized = fetch_all_trades_supabase(operational_capital=capital)
+closed_trades = [
+    t for t in all_trades_normalized 
+    if "CERRADO" in str(t.get("status", "")).upper() or "CLOSED" in str(t.get("status", "")).upper()
+]
 
 col_chart_eq, col_chart_perf = st.columns([2.4, 1.2])
 
 with col_chart_eq:
     if closed_trades:
         df_closed = pd.DataFrame(closed_trades)
-        df_closed['ts'] = pd.to_datetime(df_closed['timestamp'])
+        
+        # Procesar fechas de forma segura
+        parsed_dates = []
+        now_ts = datetime.datetime.now(datetime.timezone.utc)
+        for raw_ts in df_closed['timestamp']:
+            try:
+                if isinstance(raw_ts, str):
+                    clean_str = raw_ts.replace("Z", "+00:00")
+                    dt_val = datetime.datetime.fromisoformat(clean_str)
+                elif isinstance(raw_ts, (int, float)):
+                    dt_val = datetime.datetime.fromtimestamp(raw_ts, tz=datetime.timezone.utc)
+                else:
+                    dt_val = now_ts
+            except Exception:
+                dt_val = now_ts
+            parsed_dates.append(dt_val)
+            
+        df_closed['ts'] = parsed_dates
         df_closed = df_closed.sort_values(by='ts')
         
+        # Curva de capital acumulativa sobre PnL USD saneado
         df_closed['cum_pnl'] = df_closed['pnl_usd'].astype(float).cumsum()
         df_closed['equity_point'] = capital + df_closed['cum_pnl']
         
@@ -1073,7 +1217,7 @@ with col_chart_eq:
             yaxis=dict(showgrid=True, gridcolor='#1e293b', range=[capital * 0.95, capital * 1.05])
         )
         st.plotly_chart(fig_empty, use_container_width=True)
-        st.caption("ℹ️ Curva de capital inicializada con el capital base ($1,000.00). Trazará automáticamente cada operación real cerrada.")
+        st.caption(f"ℹ️ Curva de capital inicializada con el capital base (${capital:,.2f}). Trazará automáticamente cada operación real cerrada.")
 
 with col_chart_perf:
     wins = weekly_kpis["winning_trades"]
@@ -1102,7 +1246,7 @@ with col_chart_perf:
                 <div style="font-size: 32px; margin-bottom: 8px;">🎯</div>
                 <div style="font-size: 13px; font-weight: bold; color: #cbd5e1;">Sin ratio W/L todavía</div>
                 <div style="font-size: 11px; color: #64748b; margin-top: 6px;">
-                    Se calculará y actualizará de forma dinámica cuando el bot ejecute y cierre las primeras operaciones reales.
+                    Se calculará y actualizará dinámicamente cuando el bot ejecute y cierre las primeras operaciones reales.
                 </div>
             </div>
         """, unsafe_allow_html=True)
@@ -1252,11 +1396,29 @@ with tab_scanner:
 with tab_history:
     st.markdown("### 📋 REGISTRO DE OPERACIONES (VISTA SIMPLIFICADA)")
     
-    trades = fetch_all_trades_supabase()
+    # Barra de herramientas de mantenimiento y saneamiento de datos
+    col_clean1, col_clean2 = st.columns([1.5, 1])
+    with col_clean1:
+        if st.button("🧹 Normalizar y Corregir Registros en Supabase (Fix Bug -$1,200 USD)"):
+            c_fixed = fix_and_normalize_supabase_trades(capital)
+            st.success(f"¡Registros saneados exitosamente ({c_fixed} órdenes normalizadas al riesgo institucional)!")
+            time.sleep(1)
+            st.rerun()
+    with col_clean2:
+        if st.button("🗑️ Resetear Historial Completo (Empezar de Cero)"):
+            reset_all_trades_supabase()
+            st.warning("Historial de órdenes reseteado.")
+            time.sleep(1)
+            st.rerun()
+            
+    st.markdown("<div style='margin-bottom: 8px;'></div>", unsafe_allow_html=True)
+    
+    trades = fetch_all_trades_supabase(operational_capital=capital)
     
     if trades and len(trades) > 0:
         df_trades = pd.DataFrame(trades)
         
+        # Columnas esenciales requeridas
         essential_cols = ['order_id', 'symbol', 'side', 'entry_price', 'exit_price', 'pnl_usd', 'pnl_pct', 'status']
         for col in essential_cols:
             if col not in df_trades.columns:
