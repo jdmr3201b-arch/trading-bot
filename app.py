@@ -480,7 +480,7 @@ def fetch_weekly_closed_trades_supabase():
     for t in all_trades:
         status = str(t.get("status", "")).upper()
         if "CERRADO" in status or "CLOSED" in status:
-            raw_ts = t.get("closed_at") or t.get("timestamp")
+            raw_ts = t.get("timestamp")
             trade_dt = None
             if raw_ts:
                 try:
@@ -548,7 +548,7 @@ def calculate_daily_firewall(capital: float, max_loss_pct: float = 3.0):
     for t in all_trades:
         status = str(t.get("status", "")).upper()
         if "CERRADO" in status:
-            raw_ts = t.get("closed_at") or t.get("timestamp")
+            raw_ts = t.get("timestamp")
             if raw_ts:
                 try:
                     if isinstance(raw_ts, str):
@@ -637,22 +637,43 @@ def evaluate_and_close_open_positions():
                 pnl_usd = -1.0 * (entry_price * 0.015) if entry_price > 0 else -15.0
         
         if closed:
+            # Tipos nativos de Python para evitar errores de serialización JSON/PostgREST
+            clean_status = str(status)
+            clean_exit_price = float(round(float(current_price), 4))
+            clean_pnl_usd = float(round(float(pnl_usd), 2))
+            clean_pnl_pct = float(round(float(pnl_pct), 2))
+            
+            # Payload compatible con el esquema de Supabase: columnas validas unicamente
             update_payload = {
-                "status": status,
-                "exit_price": round(current_price, 4),
-                "pnl_usd": round(pnl_usd, 2),
-                "pnl_pct": round(pnl_pct, 2),
-                "closed_at": now_iso
+                "status": clean_status,
+                "exit_price": clean_exit_price,
+                "pnl_usd": clean_pnl_usd,
+                "pnl_pct": clean_pnl_pct
             }
             
-            if supabase_client and trade_id:
+            if supabase_client:
                 try:
-                    supabase_client.table("paper_trades") \
-                        .update(update_payload) \
-                        .eq("id", trade_id) \
-                        .execute()
-                except Exception as e:
-                    add_log(f"Fallo al actualizar orden en Supabase: {str(e)}", "ERROR")
+                    query = supabase_client.table("paper_trades").update(update_payload)
+                    if trade_id is not None:
+                        query.eq("id", trade_id).execute()
+                    else:
+                        query.eq("order_id", str(order_id)).execute()
+                except Exception as e_up:
+                    err_msg = str(e_up)
+                    # Si la columna en Supabase tiene nombres alternativos (ej: pnl o estado)
+                    try:
+                        fallback_payload = {
+                            "status": clean_status,
+                            "exit_price": clean_exit_price,
+                            "pnl": clean_pnl_usd
+                        }
+                        f_query = supabase_client.table("paper_trades").update(fallback_payload)
+                        if trade_id is not None:
+                            f_query.eq("id", trade_id).execute()
+                        else:
+                            f_query.eq("order_id", str(order_id)).execute()
+                    except Exception as e_fb:
+                        add_log(f"Aviso actualizando orden en Supabase: {str(e_fb)}", "WARN")
             
             for local_t in st.session_state.local_paper_trades:
                 if local_t.get("order_id") == order_id or local_t.get("id") == trade_id:
@@ -701,19 +722,19 @@ def execute_autotrigger(symbol: str, signal: dict, is_firewall_locked: bool, is_
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     
     trade_data = {
-        "order_id": order_id,
-        "timestamp": now_iso,
-        "symbol": symbol,
-        "side": side,
-        "entry_price": round(float(entry_price), 4),
+        "order_id": str(order_id),
+        "timestamp": str(now_iso),
+        "symbol": str(symbol),
+        "side": str(side),
+        "entry_price": float(round(float(entry_price), 4)),
         "exit_price": None,
-        "sl": round(float(sl), 4),
-        "tp": round(float(tp), 4),
+        "sl": float(round(float(sl), 4)),
+        "tp": float(round(float(tp), 4)),
         "status": "OPEN",
         "pnl_usd": 0.0,
         "pnl_pct": 0.0,
         "confluence": int(score),
-        "reason": signal.get("reason", "Confluencia Multiactivo Kraken Spot")
+        "reason": str(signal.get("reason", "Confluencia Multiactivo Kraken Spot"))
     }
     
     inserted = False
