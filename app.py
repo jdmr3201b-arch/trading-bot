@@ -26,6 +26,12 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 try:
+    import requests
+    HAS_REQUESTS_LIB = True
+except ImportError:
+    HAS_REQUESTS_LIB = False
+
+try:
     from supabase import create_client, Client
     HAS_SUPABASE_LIB = True
 except ImportError:
@@ -241,6 +247,30 @@ def add_log(message: str, level: str = "INFO"):
     st.session_state.system_logs.insert(0, f"[{timestamp}] [{level}] {message}")
     if len(st.session_state.system_logs) > 60:
         st.session_state.system_logs.pop()
+
+# =========================================================================
+# 3.1. SISTEMA DE NOTIFICACIONES PUSH AUTOMÁTICAS (NTFY.SH)
+# =========================================================================
+def enviar_notificacion_push(titulo: str, mensaje: str):
+    """
+    Función Helper de Notificaciones Push mediante HTTP POST a Ntfy.sh.
+    Canal de Alertas: https://ntfy.sh/PROYECTO_DIPPER_BOT_ALERTAS
+    Los errores de red NUNCA interrumpen el flujo ni el monitoreo del bot.
+    """
+    try:
+        url = "https://ntfy.sh/PROYECTO_DIPPER_BOT_ALERTAS"
+        safe_title = titulo.encode('latin-1', 'ignore').decode('latin-1').strip()
+        if not safe_title:
+            safe_title = "PROYECTO DIPPER | ALERTA"
+        if HAS_REQUESTS_LIB:
+            requests.post(url, data=mensaje.encode('utf-8'), headers={"Title": safe_title}, timeout=5)
+        else:
+            import urllib.request
+            req = urllib.request.Request(url, data=mensaje.encode('utf-8'), headers={"Title": safe_title}, method='POST')
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                pass
+    except Exception as e:
+        print(f"Error enviando notificación push: {e}")
 
 @st.cache_resource
 def get_supabase_client(url: str, key: str):
@@ -869,6 +899,22 @@ def evaluate_and_close_open_positions(operational_capital: float = 1000.0):
             
             log_type = "SUCCESS" if pnl_usd > 0 else "WARN"
             add_log(f"POSICIÓN CERRADA: {order_id} ({side}) en {sym} a ${current_price:,.4f} | {status} | PnL: ${pnl_usd:+.2f} USD ({pnl_pct:+.1f}%)", log_type)
+            
+            # Disparador Push 2: Al cerrar una posición (por TP o SL)
+            # Indicar Par, Motivo de Cierre, PnL en % y PnL en $ USD
+            icono_push = "🎯" if "TP" in status else "🛑"
+            titulo_push = f"{icono_push} POSICIÓN CERRADA: {sym} [{side}] - {status}"
+            signo_usd = "+" if pnl_usd > 0 else "-"
+            mensaje_push = (
+                f"📊 Par: {sym}\n"
+                f"📈 Tipo: {side}\n"
+                f"🚪 Motivo de Cierre: {status}\n"
+                f"💵 Precio Cierre: ${current_price:,.4f}\n"
+                f"📊 PnL (%): {pnl_pct:+.2f}%\n"
+                f"💰 PnL ($ USD): {signo_usd}${abs(pnl_usd):,.2f} USD\n"
+                f"⚡ ID Orden: {order_id}"
+            )
+            enviar_notificacion_push(titulo_push, mensaje_push)
 
 # ==========================================
 # 11. MOTOR DE EJECUCIÓN AUTÓNOMO (LÍMITE 3 POSICIONES)
@@ -939,6 +985,20 @@ def execute_autotrigger(symbol: str, signal: dict, is_firewall_locked: bool, is_
         st.session_state.local_paper_trades.insert(0, trade_data)
         add_log(f"AUTOTRIGGER LOCAL REGISTRADO: {order_id} {side} {symbol} @ ${entry_price:,.4f}", "SUCCESS")
         
+    # Disparador Push 1: Al abrir una nueva posición
+    # Indicar Par, Tipo (LONG/SHORT), Precio Entrada, TP y SL
+    titulo_push = f"🟢 NUEVA POSICIÓN: {symbol} [{side}]"
+    mensaje_push = (
+        f"📊 Par: {symbol}\n"
+        f"📈 Tipo: {side}\n"
+        f"💵 Precio Entrada: ${entry_price:,.4f}\n"
+        f"🎯 Take Profit (+3.0%): ${tp:,.4f}\n"
+        f"🛡️ Stop Loss (-1.5%): ${sl:,.4f}\n"
+        f"⚡ ID Orden: {order_id}\n"
+        f"🔥 Score Confluencia: {score}/100"
+    )
+    enviar_notificacion_push(titulo_push, mensaje_push)
+    
     return True, f"¡Orden Autónoma {order_id} abierta para {symbol} [{side}]!"
 
 # ==========================================
@@ -1033,6 +1093,16 @@ with st.sidebar:
     if st.button("⚡ Escanear Ahora (18 Pares USD)"):
         st.rerun()
 
+    st.markdown("---")
+    st.markdown("### 🔔 ALERTAS PUSH (NTFY.SH)")
+    st.caption("Canal: [ntfy.sh/PROYECTO_DIPPER_BOT_ALERTAS](https://ntfy.sh/PROYECTO_DIPPER_BOT_ALERTAS)")
+    if st.button("📲 Probar Alerta Push"):
+        enviar_notificacion_push(
+            "🔔 TEST DE CONEXIÓN | PROYECTO DIPPER",
+            f"Alerta Push Ntfy.sh operativa.\nHora UTC: {datetime.datetime.now(datetime.timezone.utc).strftime('%H:%M:%S')}\nMonitoreando 18 pares de Kraken Spot."
+        )
+        st.success("¡Alerta enviada a ntfy.sh/PROYECTO_DIPPER_BOT_ALERTAS!")
+
 if auto_refresh_enabled:
     st.markdown("""
         <script>
@@ -1056,6 +1126,24 @@ firewall = calculate_daily_firewall(capital, max_loss_pct=3.0)
 is_circuit_breaker = firewall["is_circuit_breaker"]
 open_positions = get_all_open_positions(operational_capital=capital)
 open_positions_count = len(open_positions)
+
+# Disparador Push 3: Al activarse el Circuit Breaker Diario (-3.0%)
+if "cb_push_sent" not in st.session_state:
+    st.session_state.cb_push_sent = False
+
+if is_circuit_breaker and not st.session_state.cb_push_sent:
+    titulo_cb = "🚨 ALERTA URGENTE: Circuit Breaker Activado (-3.0%)"
+    mensaje_cb = (
+        f"🛑 BLOQUEO DE SEGURIDAD ACTIVADO\n"
+        f"Drawdown Diario: ${firewall['daily_pnl_usd']:,.2f} USD ({firewall['daily_pnl_pct']:.2f}%)\n"
+        f"Límite Máximo Permitido: ${firewall['max_allowed_loss_usd']:,.2f} USD (-3.0%)\n"
+        f"Operaciones de Hoy: {firewall['daily_trades_count']}\n"
+        f"Las nuevas órdenes están BLOQUEADAS por protocolo institucional hasta el próximo ciclo UTC."
+    )
+    enviar_notificacion_push(titulo_cb, mensaje_cb)
+    st.session_state.cb_push_sent = True
+elif not is_circuit_breaker:
+    st.session_state.cb_push_sent = False
 
 # 4. Escaneo automático y posible ejecución de Autotrigger
 scanner_data = scan_all_18_watchlist()
