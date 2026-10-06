@@ -1,6 +1,5 @@
-ccxt
-pandas
-google-genai
-supabase
 streamlit
+pandas
 plotly
+ccxt
+supabase
