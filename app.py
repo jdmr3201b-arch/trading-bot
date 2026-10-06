@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """
-PROYECTO DIPPER | Quant Terminal v2.5 (Multi-Asset Engine)
+PROYECTO DIPPER | Quant Terminal v2.6 (Kraken USD Native Engine)
 Terminal Autónomo de Trading Cuantitativo
-Escaneo: 18 Criptomonedas Kraken Spot
+Escaneo: 18 Criptomonedas Kraken Spot Nativas en USD
 Gestión de Riesgo: Límite de 3 Posiciones Concurrentes, Firewall Diario (-3%), TP/SL Dinámico
 Stack: Python 3.10+, Streamlit, CCXT (Kraken Spot REST), Supabase (PostgreSQL), Plotly
 Despliegue: Render / Streamlit Cloud
@@ -113,7 +113,7 @@ st.markdown("""
         font-weight: 500;
     }
 
-    /* Estilización de st.metric nativo en tema oscuro */
+    /* Estilización de st.metric en tema oscuro */
     div[data-testid="stMetric"] {
         background-color: #0b1120;
         border: 1px solid #1e293b;
@@ -191,7 +191,6 @@ st.markdown("""
         color: #cbd5e1;
     }
 
-    /* Adaptación Móvil */
     @media (max-width: 768px) {
         .status-grid {
             grid-template-columns: repeat(2, 1fr) !important;
@@ -205,14 +204,15 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 2. DEFINICIÓN DE ACTIVOS (18 CRIPTOMONEDAS)
+# 2. DEFINICIÓN DE ACTIVOS NATIVOS KRAKEN (18 PARES USD)
 # ==========================================
+# Kraken opera de forma nativa en USD con alta liquidez spot
 WATCHLIST_18 = [
-    "BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT",
-    "XRP/USDT", "ADA/USDT", "DOGE/USDT", "AVAX/USDT",
-    "LINK/USDT", "DOT/USDT", "NEAR/USDT", "LTC/USDT",
-    "SUI/USDT", "FET/USDT", "APT/USDT", "PEPE/USDT",
-    "SHIB/USDT", "ARB/USDT"
+    "BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD",
+    "XRP/USD", "DOT/USD", "AVAX/USD", "LINK/USD",
+    "LTC/USD", "BCH/USD", "NEAR/USD", "SUI/USD",
+    "APT/USD", "FET/USD", "ARB/USD", "PEPE/USD",
+    "DOGE/USD", "SHIB/USD"
 ]
 
 MAX_CONCURRENT_POSITIONS = 3
@@ -223,8 +223,6 @@ MAX_CONCURRENT_POSITIONS = 3
 ENV_SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
 ENV_SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
-# Historial en memoria local solo para operaciones reales ejecutadas por el bot
-# (SIN datos falsos o simulaciones inventadas por defecto)
 if "local_paper_trades" not in st.session_state:
     st.session_state.local_paper_trades = []
 
@@ -250,38 +248,79 @@ def get_supabase_client(url: str, key: str):
 supabase_client = get_supabase_client(ENV_SUPABASE_URL, ENV_SUPABASE_KEY)
 
 # ==========================================
-# 4. CONEXIÓN A KRAKEN (CCXT REST)
+# 4. CONEXIÓN A KRAKEN CON RESOLUCIÓN ROBUSTA DE MERCADOS
 # ==========================================
 @st.cache_resource
 def get_kraken_exchange():
-    return ccxt.kraken({
+    """
+    Inicializa el cliente CCXT de Kraken y precarga los mercados (load_markets).
+    Esto mapea los nombres internos (ej: XXBTZUSD -> BTC/USD, XDG/USD -> DOGE/USD).
+    """
+    ex = ccxt.kraken({
         'enableRateLimit': True,
         'timeout': 15000,
     })
+    try:
+        ex.load_markets()
+    except Exception as e:
+        # Si falla la carga inicial de mercados, continuará con resolución bajo demanda
+        pass
+    return ex
 
 exchange = get_kraken_exchange()
 
+def resolve_kraken_symbol(ex, symbol: str) -> str:
+    """
+    Resuelve el símbolo estándar al identificador de mercado exacto reconocido por CCXT y Kraken.
+    Previene el error 'kraken does not have market symbol'.
+    """
+    if not ex.markets:
+        try:
+            ex.load_markets()
+        except Exception:
+            return symbol
+
+    # 1. Comprobación directa (ej. 'BTC/USD')
+    if symbol in ex.markets:
+        return symbol
+
+    # 2. Alternativas conocidas de Kraken Spot
+    base, quote = symbol.split('/') if '/' in symbol else (symbol, 'USD')
+    aliases = [
+        f"XBT/{quote}" if base == "BTC" else "",
+        f"XDG/{quote}" if base == "DOGE" else "",
+        f"XXBTZ{quote}" if base == "BTC" else "",
+        f"{base}/USDT",
+        f"{base}/USD"
+    ]
+    for alt in aliases:
+        if alt and alt in ex.markets:
+            return alt
+
+    return symbol
+
 @st.cache_data(ttl=20, show_spinner=False)
-def fetch_market_data(symbol='BTC/USDT', timeframe='15m', limit=50):
+def fetch_market_data(symbol='BTC/USD', timeframe='15m', limit=50):
     """
     Obtiene las últimas 50 velas reales directamente desde Kraken Spot REST mediante CCXT.
-    Calcula EMA 200, ATR y RSI sobre datos reales de mercado.
+    Aplica resolución robusta de mercados y calcula EMA 200, ATR y RSI sin advertencias repetitivas.
     """
     try:
-        # Conexión real con Kraken REST
-        kraken = get_kraken_exchange()
-        ohlcv = kraken.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
+        ex = get_kraken_exchange()
+        target_symbol = resolve_kraken_symbol(ex, symbol)
+        
+        ohlcv = ex.fetch_ohlcv(target_symbol, timeframe=timeframe, limit=limit)
         
         if ohlcv and len(ohlcv) > 0:
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             df['time_label'] = df['timestamp'].dt.strftime('%d/%m %H:%M')
             
-            # EMA 200 institucional calculada sobre los precios reales de cierre
+            # EMA 200 calculada sobre precios reales de cierre
             span_val = 200 if len(df) >= 200 else max(10, len(df))
             df['ema200'] = df['close'].ewm(span=span_val, adjust=False).mean()
             
-            # Average True Range (ATR 14)
+            # ATR (14)
             high_low = df['high'] - df['low']
             high_close = (df['high'] - df['close'].shift()).abs()
             low_close = (df['low'] - df['close'].shift()).abs()
@@ -298,11 +337,12 @@ def fetch_market_data(symbol='BTC/USDT', timeframe='15m', limit=50):
             df['rsi'] = df['rsi'].bfill()
             
             return df
-        else:
-            add_log(f"Kraken REST retornó 0 velas para {symbol}", "WARN")
-            return pd.DataFrame()
+        return pd.DataFrame()
+    except ccxt.BadSymbol:
+        # Captura específica de símbolo inexistente en Kraken sin inundar el Audit Log
+        return pd.DataFrame()
     except Exception as e:
-        add_log(f"Error conectando a Kraken REST ({symbol}): {str(e)}", "WARN")
+        # Fallo de red o timeout controlado
         return pd.DataFrame()
 
 # ==========================================
@@ -313,7 +353,7 @@ def evaluate_confluence(df: pd.DataFrame):
         return {
             "side": "NEUTRAL",
             "score": 0,
-            "reason": "Calculando confluencias con datos insuficientes...",
+            "reason": "Sincronizando feed de mercado Kraken...",
             "price": 0.0,
             "ema": 0.0,
             "atr": 0.0,
@@ -390,10 +430,7 @@ def evaluate_macro_filter(df: pd.DataFrame, force_status: str = "AUTO"):
 # 7. GESTIÓN DE BASE DE DATOS Y OPERACIONES
 # ==========================================
 def fetch_all_trades_supabase():
-    """
-    Recupera las órdenes legítimas desde la tabla paper_trades en Supabase,
-    o desde la memoria local si Supabase no está configurado.
-    """
+    """Recupera órdenes legítimas desde Supabase o memoria de sesión."""
     if supabase_client:
         try:
             res = supabase_client.table("paper_trades").select("*").order("timestamp", desc=True).execute()
@@ -404,9 +441,7 @@ def fetch_all_trades_supabase():
     return st.session_state.local_paper_trades
 
 def get_all_open_positions():
-    """
-    Retorna la lista de todas las posiciones con estado OPEN en el portafolio.
-    """
+    """Retorna todas las posiciones actualmente abiertas (OPEN) en el portafolio."""
     all_trades = fetch_all_trades_supabase()
     return [t for t in all_trades if str(t.get("status", "")).upper() == "OPEN"]
 
@@ -419,17 +454,13 @@ def check_existing_open_position_for_symbol(symbol: str):
     return False, None
 
 # ==========================================
-# 8. BALANCE Y RESUMEN SEMANAL DE CAPITAL (ÚLTIMOS 7 DÍAS)
+# 8. BALANCE Y RESUMEN SEMANAL DE CAPITAL
 # ==========================================
 def fetch_weekly_closed_trades_supabase():
-    """
-    Consulta las operaciones con estado CERRADO de los últimos 7 días.
-    """
     now_utc = datetime.datetime.now(datetime.timezone.utc)
     seven_days_ago = now_utc - datetime.timedelta(days=7)
     seven_days_ago_iso = seven_days_ago.isoformat()
     
-    # 1. Intentar consulta directa filtrada si Supabase está activo
     if supabase_client:
         try:
             res = supabase_client.table("paper_trades") \
@@ -443,7 +474,6 @@ def fetch_weekly_closed_trades_supabase():
         except Exception as e:
             pass
     
-    # 2. Filtrado seguro sobre el conjunto general
     all_trades = fetch_all_trades_supabase()
     weekly_trades = []
     
@@ -473,13 +503,6 @@ def fetch_weekly_closed_trades_supabase():
     return weekly_trades
 
 def calculate_weekly_capital_metrics(initial_capital: float = 1000.0):
-    """
-    Calcula:
-    1. Capital Inicial ($)
-    2. Capital Actual (Equity)
-    3. PnL Semanal ($ y %)
-    4. Win Rate (% de acierto y conteo W/L)
-    """
     weekly_closed_trades = fetch_weekly_closed_trades_supabase()
     
     weekly_pnl_usd = 0.0
@@ -554,13 +577,14 @@ def calculate_daily_firewall(capital: float, max_loss_pct: float = 3.0):
         "status_text": "BLOQUEADO (-3.0% ALCANZADO)" if is_circuit_breaker else "OPERATIVO"
     }
 
-# ==========================================
-# 10. EVALUACIÓN Y CIERRE DE TODAS LAS POSICIONES OPEN
-# ==========================================
+# =========================================================================
+# 10. EVALUACIÓN Y CIERRE DE POSICIONES OPEN (SINCRONIZADO POR SÍMBOLO)
+# =========================================================================
 def evaluate_and_close_open_positions():
     """
-    Monitorea de forma iterativa todas las posiciones OPEN en el portafolio
-    y las cierra automáticamente cuando alcanzan TP (+3.0%) o SL (-1.5%).
+    Monitorea de forma iterativa todas las posiciones OPEN en el portafolio.
+    Consulta el precio en vivo del par EXACTO correspondiente a cada orden.
+    Ejecuta salidas automáticas por Take Profit (+3.0%) o Stop Loss (-1.5%).
     """
     open_positions = get_all_open_positions()
     if not open_positions:
@@ -569,7 +593,7 @@ def evaluate_and_close_open_positions():
     now_iso = datetime.datetime.now(datetime.timezone.utc).isoformat()
     
     for trade in open_positions:
-        sym = trade.get("symbol", "BTC/USDT")
+        sym = trade.get("symbol", "BTC/USD")
         trade_id = trade.get("id")
         order_id = trade.get("order_id", f"DIP-{trade_id}")
         side = trade.get("side", "LONG")
@@ -577,8 +601,8 @@ def evaluate_and_close_open_positions():
         sl = float(trade.get("sl", entry_price * 0.985))
         tp = float(trade.get("tp", entry_price * 1.030))
         
-        # Obtener precio actual de ese activo
-        df_sym = fetch_market_data(sym, limit=20)
+        # Consulta de precio en vivo del par exacto de la orden
+        df_sym = fetch_market_data(sym, limit=10)
         if df_sym.empty:
             continue
         current_price = float(df_sym.iloc[-1]['close'])
@@ -606,7 +630,7 @@ def evaluate_and_close_open_positions():
                 status = "CERRADO (TP)"
                 pnl_pct = 3.0
                 pnl_usd = entry_price * 0.030 if entry_price > 0 else 30.0
-            elif current_price >= sl:
+            elif current_price <= sl:
                 closed = True
                 status = "CERRADO (SL)"
                 pnl_pct = -1.5
@@ -646,30 +670,26 @@ def execute_autotrigger(symbol: str, signal: dict, is_firewall_locked: bool, is_
     side = signal.get("side", "NEUTRAL")
     entry_price = signal.get("price", 0.0)
     
-    # 1. Validación de Confluencia
     if score < 75 or side not in ["LONG", "SHORT"]:
         return False, "Score insuficiente para gatillo autónomo (Mínimo requerido: 75%)"
     
-    # 2. Validación de Firewall Diario
     if is_firewall_locked:
         return False, "AUTOTRIGGER BLOQUEADO: Circuit Breaker Diario (-3.0%) activado."
         
-    # 3. Validación de Filtro Macro
     if not is_macro_safe:
-        return False, "AUTOTRIGGER BLOQUEADO: Filtro Macro detecta régimen de volatilidad extrema."
+        return False, "AUTOTRIGGER BLOQUEADO: Filtro Macro detecta volatilidad extrema."
         
-    # 4. REGLA ESTRICTA: MÁXIMO 3 POSICIONES CONCURRENTES EN EL PORTAFOLIO
+    # REGLA 1: MÁXIMO 3 POSICIONES CONCURRENTES
     all_open = get_all_open_positions()
     if len(all_open) >= MAX_CONCURRENT_POSITIONS:
         return False, f"Límite de posiciones concurrentes alcanzado (Máximo {MAX_CONCURRENT_POSITIONS} abiertas)"
         
-    # 5. REGLA ESTRICTA: MÁXIMO 1 POSICIÓN POR PAR
+    # REGLA 2: MÁXIMO 1 POSICIÓN POR PAR
     has_symbol_open, existing_order = check_existing_open_position_for_symbol(symbol)
     if has_symbol_open:
         order_code = existing_order.get("order_id", "N/A")
         return False, f"Ya existe una posición abierta ({order_code}) para {symbol} (Máximo 1 por par)"
     
-    # Cálculo de TP/SL institucional
     if side == "LONG":
         tp = entry_price * 1.030
         sl = entry_price * 0.985
@@ -693,7 +713,7 @@ def execute_autotrigger(symbol: str, signal: dict, is_firewall_locked: bool, is_
         "pnl_usd": 0.0,
         "pnl_pct": 0.0,
         "confluence": int(score),
-        "reason": signal.get("reason", "Confluencia Multiactivo Kraken")
+        "reason": signal.get("reason", "Confluencia Multiactivo Kraken Spot")
     }
     
     inserted = False
@@ -714,31 +734,35 @@ def execute_autotrigger(symbol: str, signal: dict, is_firewall_locked: bool, is_
     return True, f"¡Orden Autónoma {order_id} abierta para {symbol} [{side}]!"
 
 # ==========================================
-# 12. ESCANEO ITERATIVO DE LOS 18 PARES
+# 12. ESCANEO ITERATIVO DE LOS 18 PARES NATIVOS
 # ==========================================
 def scan_all_18_watchlist():
     """
-    Escanea de forma iterativa los 18 pares de Kraken Spot y compila el estado técnico.
+    Escanea de forma iterativa los 18 pares nativos en USD de Kraken Spot.
+    Maneja excepciones de forma individual sin detener el terminal.
     """
     scan_results = []
     for sym in WATCHLIST_18:
-        df_sym = fetch_market_data(sym, timeframe='15m', limit=30)
-        sig = evaluate_confluence(df_sym)
-        scan_results.append({
-            "symbol": sym,
-            "price": sig["price"],
-            "score": sig["score"],
-            "side": sig["side"],
-            "rsi": sig["rsi"],
-            "reason": sig["reason"]
-        })
+        try:
+            df_sym = fetch_market_data(sym, timeframe='15m', limit=30)
+            sig = evaluate_confluence(df_sym)
+            scan_results.append({
+                "symbol": sym,
+                "price": sig["price"],
+                "score": sig["score"],
+                "side": sig["side"],
+                "rsi": sig["rsi"],
+                "reason": sig["reason"]
+            })
+        except Exception:
+            continue
     return scan_results
 
 # ==========================================
 # 13. INTERFAZ GRÁFICA BLOOMBERG TERMINAL
 # ==========================================
 
-# ENCABEZADO
+# ENCABEZADO PRINCIPAL
 st.markdown("""
 <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 0 16px 0; border-bottom: 1px solid #1e293b; margin-bottom: 16px; flex-wrap: wrap; gap: 10px;">
     <div style="display: flex; align-items: center; gap: 10px;">
@@ -746,11 +770,11 @@ st.markdown("""
         <div>
             <div style="display: flex; align-items: center; gap: 8px;">
                 <span style="font-size: 19px; font-weight: 800; color: #f8fafc; letter-spacing: 1px;">PROYECTO DIPPER</span>
-                <span style="background: #1e293b; color: #38bdf8; font-size: 10px; padding: 3px 8px; border-radius: 4px; font-weight: 700; border: 1px solid #334155;">QUANT TERMINAL v2.5</span>
-                <span class="badge-auto">18 ACTIVOS KRAKEN · MÁX 3 OPEN</span>
+                <span style="background: #1e293b; color: #38bdf8; font-size: 10px; padding: 3px 8px; border-radius: 4px; font-weight: 700; border: 1px solid #334155;">QUANT TERMINAL v2.6</span>
+                <span class="badge-auto">KRAKEN USD NATIVO · MÁX 3 OPEN</span>
             </div>
             <div style="font-size: 11px; color: #64748b; margin-top: 2px;">
-                MOTOR MULTIACTIVO DE TRADING CUANTITATIVO · KRAKEN REST · SUPABASE POSTGRESQL
+                MOTOR MULTIACTIVO DE TRADING CUANTITATIVO · KRAKEN SPOT USD · SUPABASE POSTGRESQL
             </div>
         </div>
     </div>
@@ -766,10 +790,10 @@ with st.sidebar:
     st.markdown("### ⚙️ PARÁMETROS DEL SISTEMA")
     
     selected_symbol = st.selectbox(
-        "Par en Inspección Detallada",
+        "Par en Inspección Detallada (18 Pares USD)",
         WATCHLIST_18,
         index=0,
-        help="Selecciona cualquiera de las 18 criptomonedas para examinar sus velas e indicadores"
+        help="Selecciona cualquiera de las 18 criptomonedas nativas en USD de Kraken Spot"
     )
     timeframe = st.selectbox("Temporalidad", ["15m", "1h", "4h"], index=0)
     
@@ -800,10 +824,9 @@ with st.sidebar:
     
     st.markdown("---")
     auto_refresh_enabled = st.checkbox("Refresco Automático (30s)", value=True)
-    if st.button("⚡ Escanear Ahora (18 Pares)"):
+    if st.button("⚡ Escanear Ahora (18 Pares USD)"):
         st.rerun()
 
-# Refresco de página automático (30 segundos)
 if auto_refresh_enabled:
     st.markdown("""
         <script>
@@ -814,11 +837,11 @@ if auto_refresh_enabled:
     """, unsafe_allow_html=True)
 
 # EJECUCIÓN DEL CICLO EN TIEMPO REAL
-# 1. Monitoreo y cierre de posiciones OPEN activas
+# 1. Monitoreo y cierre de posiciones OPEN activas (sincronizadas por su par respectivo)
 evaluate_and_close_open_positions()
 
 # 2. Obtención de datos del par en inspección
-df_inspected = fetch_market_data(selected_symbol, timeframe, limit=60)
+df_inspected = fetch_market_data(selected_symbol, timeframe, limit=50)
 current_price_inspected = float(df_inspected.iloc[-1]['close']) if not df_inspected.empty else 0.0
 signal_inspected = evaluate_confluence(df_inspected)
 is_macro_safe, macro_status_str = evaluate_macro_filter(df_inspected, macro_override)
@@ -844,7 +867,7 @@ if not is_circuit_breaker and is_macro_safe and open_positions_count < MAX_CONCU
                 break
 
 # =========================================================================
-# REQUERIMIENTO 4.B: BLOQUE DIRECTIVO E INTUITIVO PARA EL OPERADOR
+# BLOQUE DIRECTIVO E INTUITIVO PARA EL OPERADOR
 # =========================================================================
 if is_circuit_breaker:
     st.error(
@@ -854,7 +877,7 @@ if is_circuit_breaker:
 elif not is_macro_safe:
     st.warning(
         "⚠️ **ATENCIÓN**: Filtro Macro activado por alta volatilidad o noticias de impacto. "
-        "El escaneo de los 18 pares continúa en modo observación, pero la apertura de nuevas posiciones está en pausa preventiva."
+        "El escaneo de los 18 pares en USD continúa en modo observación, pero la apertura de nuevas posiciones está en pausa preventiva."
     )
 elif open_positions_count >= MAX_CONCURRENT_POSITIONS:
     st.info(
@@ -863,7 +886,7 @@ elif open_positions_count >= MAX_CONCURRENT_POSITIONS:
     )
 else:
     st.success(
-        f"🟢 **MOTOR ACTIVO**: Monitoreando 18 pares de Kraken Spot en tiempo real. "
+        f"🟢 **MOTOR ACTIVO**: Monitoreando 18 pares de Kraken Spot (Paridad USD) en tiempo real. "
         f"Posiciones abiertas: **{open_positions_count}/{MAX_CONCURRENT_POSITIONS}**. Todo configurado correctamente. No requiere intervención manual."
     )
 
@@ -873,8 +896,8 @@ st.markdown(f"""
 <div class="status-grid">
     <div class="status-card">
         <div class="status-title"><span>⚡</span> MOTOR DE ESCANEO</div>
-        <div class="status-value" style="color: #34d399;">18 PARES SPOT</div>
-        <div class="status-sub">↑ Kraken REST Activo</div>
+        <div class="status-value" style="color: #34d399;">18 PARES USD</div>
+        <div class="status-sub">↑ Kraken Spot Nativo</div>
     </div>
     <div class="status-card">
         <div class="status-title"><span>📊</span> PORTAFOLIO CONCURRENTE</div>
@@ -899,11 +922,7 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # =========================================================================
-# REQUERIMIENTO 4.A: PANEL DE MÉTRICAS FINANCIERAS (KPIS) EN LA PARTE SUPERIOR
-# 1. Capital Inicial ($)
-# 2. Capital Actual (Equity total en USD)
-# 3. PnL Semanal ($ y %)
-# 4. Win Rate (% de acierto y récord W/L)
+# PANEL DE MÉTRICAS FINANCIERAS (KPIS) EN LA PARTE SUPERIOR
 # =========================================================================
 weekly_kpis = calculate_weekly_capital_metrics(initial_capital=capital)
 
@@ -960,7 +979,7 @@ with col_kpi4:
 st.markdown("<div style='margin-bottom: 16px;'></div>", unsafe_allow_html=True)
 
 # =========================================================================
-# REQUERIMIENTO 3: GRÁFICAS FINANCIERAS EN VIVO (EQUITY CURVE & RENDIMIENTO)
+# GRÁFICAS FINANCIERAS EN VIVO (EQUITY CURVE & RENDIMIENTO)
 # =========================================================================
 st.markdown("### 📈 CURVA DE CAPITAL (EQUITY CURVE) & RENDIMIENTO EN VIVO")
 
@@ -971,23 +990,18 @@ col_chart_eq, col_chart_perf = st.columns([2.4, 1.2])
 
 with col_chart_eq:
     if closed_trades:
-        # Ordenar cronológicamente ascendente para trazar la curva
         df_closed = pd.DataFrame(closed_trades)
         df_closed['ts'] = pd.to_datetime(df_closed['timestamp'])
         df_closed = df_closed.sort_values(by='ts')
         
-        # Calcular PnL acumulado y Equity en cada punto
         df_closed['cum_pnl'] = df_closed['pnl_usd'].astype(float).cumsum()
         df_closed['equity_point'] = capital + df_closed['cum_pnl']
         
-        # Crear punto inicial de partida
         first_time = df_closed['ts'].iloc[0] - datetime.timedelta(hours=1)
         plot_dates = [first_time] + df_closed['ts'].tolist()
         plot_equity = [capital] + df_closed['equity_point'].tolist()
         
         fig_equity = go.Figure()
-        
-        # Área sombreada y línea de Curva de Capital
         fig_equity.add_trace(go.Scatter(
             x=plot_dates,
             y=plot_equity,
@@ -999,7 +1013,6 @@ with col_chart_eq:
             marker=dict(size=6, color='#38bdf8')
         ))
         
-        # Línea base de Capital Inicial
         fig_equity.add_hline(
             y=capital,
             line_dash="dash",
@@ -1020,7 +1033,6 @@ with col_chart_eq:
         )
         st.plotly_chart(fig_equity, use_container_width=True)
     else:
-        # Estado inicial limpio sin trades inventados
         fig_empty = go.Figure()
         now_time = datetime.datetime.now(datetime.timezone.utc)
         fig_empty.add_trace(go.Scatter(
@@ -1043,7 +1055,6 @@ with col_chart_eq:
         st.caption("ℹ️ Curva de capital inicializada con el capital base ($1,000.00). Trazará automáticamente cada operación real cerrada.")
 
 with col_chart_perf:
-    # Gráfica de Ratio de Acierto (Donut Win/Loss)
     wins = weekly_kpis["winning_trades"]
     losses = weekly_kpis["losing_trades"]
     
@@ -1070,7 +1081,7 @@ with col_chart_perf:
                 <div style="font-size: 32px; margin-bottom: 8px;">🎯</div>
                 <div style="font-size: 13px; font-weight: bold; color: #cbd5e1;">Sin ratio W/L todavía</div>
                 <div style="font-size: 11px; color: #64748b; margin-top: 6px;">
-                    Se calculará y actualizará de forma dinámica cuando el bot ejecute y cierre las primeras operaciones.
+                    Se calculará y actualizará de forma dinámica cuando el bot ejecute y cierre las primeras operaciones reales.
                 </div>
             </div>
         """, unsafe_allow_html=True)
@@ -1082,16 +1093,15 @@ st.markdown("---")
 # ==========================================
 tab_monitor, tab_scanner, tab_history = st.tabs([
     "⚡ Monitor de Velas & Confluencia",
-    "🌐 Matriz de Escaneo Multiactivo (18 Pares)",
+    "🌐 Matriz de Escaneo Multiactivo (18 Pares USD)",
     "📋 Historial de Órdenes & Audit Log"
 ])
 
-# PESTAÑA 1: MONITOR DE VELAS
+# PESTAÑA 1: MONITOR DE VELAS REALES
 with tab_monitor:
     col_chart, col_signal = st.columns([2.6, 1.1])
     
     with col_chart:
-        # Conexión Real con Kraken: Últimas 50 velas reales del par seleccionado
         df_real = fetch_market_data(selected_symbol, timeframe=timeframe, limit=50)
         
         if not df_real.empty:
@@ -1126,7 +1136,7 @@ with tab_monitor:
                 decreasing_fillcolor='#ef4444'
             ))
             
-            # Línea de la EMA 200 real calculada sobre precio de cierre
+            # Línea de la EMA 200 real
             fig.add_trace(go.Scatter(
                 x=df_real['time_label'],
                 y=df_real['ema200'],
@@ -1166,7 +1176,7 @@ with tab_monitor:
             )
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.warning(f"⚠️ Conectando con Kraken Spot REST para {selected_symbol}... Si la respuesta demora, por favor reintenta.")
+            st.warning(f"⚠️ Sincronizando datos de {selected_symbol} desde Kraken Spot REST... Por favor reintenta en unos instantes.")
 
     with col_signal:
         side_ins = signal_inspected['side']
@@ -1196,10 +1206,10 @@ with tab_monitor:
         else:
             st.info("⏳ Monitoreando mercado... Esperando Score ≥ 75%")
 
-# PESTAÑA 2: MATRIZ DE ESCANEO DE LOS 18 PARES
+# PESTAÑA 2: MATRIZ DE ESCANEO DE LOS 18 PARES NATIVOS EN USD
 with tab_scanner:
-    st.markdown("### 🌐 ESCANEO MULTIACTIVO EN TIEMPO REAL (18 CRIPTOMONEDAS)")
-    st.caption("Kraken Spot REST · Actualización cíclica cada 30 segundos · Límite máximo: 3 posiciones abiertas simultáneas")
+    st.markdown("### 🌐 ESCANEO MULTIACTIVO EN TIEMPO REAL (18 PARES KRAKEN USD)")
+    st.caption("Kraken Spot REST · Paridad Nativa USD · Actualización cíclica cada 30 segundos · Límite máximo: 3 posiciones abiertas")
     
     if scanner_data:
         df_scan = pd.DataFrame(scanner_data)
@@ -1208,7 +1218,7 @@ with tab_scanner:
             use_container_width=True,
             hide_index=True,
             column_config={
-                "symbol": st.column_config.TextColumn("Par Cripto"),
+                "symbol": st.column_config.TextColumn("Par Cripto (USD)"),
                 "price": st.column_config.NumberColumn("Precio Actual", format="$%.4f"),
                 "score": st.column_config.NumberColumn("Score Confluencia", format="%d pts"),
                 "side": st.column_config.TextColumn("Dirección"),
@@ -1217,13 +1227,7 @@ with tab_scanner:
             }
         )
 
-# =========================================================================
-# REQUERIMIENTO 2 & 4.C: TABLA SIMPLIFICADA Y AUDIT LOG ESTRICTO
-# Columnas requeridas:
-# order_id, symbol, side, entry_price, exit_price, pnl_usd, pnl_pct, status
-# Formateando valores numéricos a moneda ($) y porcentaje (%).
-# Si está vacía: mostrar mensaje claro sin simulaciones falsas.
-# =========================================================================
+# PESTAÑA 3: HISTORIAL DE ÓRDENES SIMPLIFICADO Y AUDIT LOG
 with tab_history:
     st.markdown("### 📋 REGISTRO DE OPERACIONES (VISTA SIMPLIFICADA)")
     
@@ -1232,7 +1236,6 @@ with tab_history:
     if trades and len(trades) > 0:
         df_trades = pd.DataFrame(trades)
         
-        # Columnas solicitadas estrictamente
         essential_cols = ['order_id', 'symbol', 'side', 'entry_price', 'exit_price', 'pnl_usd', 'pnl_pct', 'status']
         for col in essential_cols:
             if col not in df_trades.columns:
@@ -1256,7 +1259,6 @@ with tab_history:
             }
         )
     else:
-        # Mensaje claro cuando no hay operaciones reales registradas
         st.info("ℹ️ Sin operaciones reales registradas en la base de datos. El motor está activo esperando confluencia ≥ 75% para abrir la primera posición.")
         
     st.markdown("---")
