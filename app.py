@@ -1728,16 +1728,17 @@ with tab_history:
     # REQUERIMIENTO 2: POSICIONES ACTIVAS (OPEN) EN CONTENEDOR SUPERIOR SEPARADO
     # Estilo de tarjeta o tabla neutra sin color de fondo invasivo
     # -------------------------------------------------------------------------
-    st.markdown("""
-        <div style="font-size: 13px; font-weight: 800; color: #f8fafc; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
-            <span>⚡</span> POSICIONES ACTIVAS EN TIEMPO REAL (OPEN)
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div style="font-size: 13px; font-weight: 800; color: #f8fafc; margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">'
+        '<span>⚡</span> POSICIONES ACTIVAS EN TIEMPO REAL (OPEN)'
+        '</div>',
+        unsafe_allow_html=True
+    )
     
     open_trades_list = get_all_open_positions(operational_capital=capital)
     
     if open_trades_list:
-        st.markdown('<div class="open-positions-container"><div class="open-pos-grid">', unsafe_allow_html=True)
+        cards_html = []
         for ot in open_trades_list:
             o_id = ot.get("order_id", "N/A")
             o_sym = ot.get("symbol", "N/A")
@@ -1761,34 +1762,38 @@ with tab_history:
                 unrealized_pct = ((o_entry - curr_val) / o_entry * 100.0) if o_entry > 0 else 0.0
             unrealized_usd = capital * (unrealized_pct / 100.0)
             
-            side_badge = f'<span class="badge-side-long">LONG</span>' if o_side == "LONG" else f'<span class="badge-side-short">SHORT</span>'
+            side_badge = '<span class="badge-side-long">LONG</span>' if o_side == "LONG" else '<span class="badge-side-short">SHORT</span>'
             pnl_color = "#00E676" if unrealized_usd >= 0 else "#FF5252"
             
-            st.markdown(f"""
-                <div class="open-pos-card">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                        <span style="font-weight: 800; color: #f8fafc; font-size: 14px;">{o_sym} {side_badge}</span>
-                        <span style="background: #0284c7; color: #f0f9ff; font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 700;">OPEN</span>
-                    </div>
-                    <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; font-size: 11px; color: #94a3b8;">
-                        <div>Entrada: <b style="color: #f8fafc;">${o_entry:,.4f}</b></div>
-                        <div>Actual: <b style="color: #38bdf8;">${curr_val:,.4f}</b></div>
-                        <div>Take Profit (+3%): <b style="color: #00E676;">${o_tp:,.4f}</b></div>
-                        <div>Stop Loss (-1.5%): <b style="color: #FF5252;">${o_sl:,.4f}</b></div>
-                    </div>
-                    <div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #1e293b; display: flex; justify-content: space-between; align-items: center; font-size: 11px;">
-                        <span style="color: #64748b;">Entrada: {hora_cot_str} ({fecha_cot_str})</span>
-                        <span style="color: {pnl_color}; font-weight: bold;">Flotante: {unrealized_pct:+.2f}% (${unrealized_usd:+.2f} USD)</span>
-                    </div>
-                </div>
-            """, unsafe_allow_html=True)
-        st.markdown('</div></div>', unsafe_allow_html=True)
+            card_item = (
+                '<div class="open-pos-card">'
+                '<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">'
+                f'<span style="font-weight: 800; color: #f8fafc; font-size: 14px;">{o_sym} {side_badge}</span>'
+                '<span style="background: #0284c7; color: #f0f9ff; font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 700;">OPEN</span>'
+                '</div>'
+                '<div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; font-size: 11px; color: #94a3b8;">'
+                f'<div>Entrada: <b style="color: #f8fafc;">${o_entry:,.4f}</b></div>'
+                f'<div>Actual: <b style="color: #38bdf8;">${curr_val:,.4f}</b></div>'
+                f'<div>Take Profit (+3%): <b style="color: #00E676;">${o_tp:,.4f}</b></div>'
+                f'<div>Stop Loss (-1.5%): <b style="color: #FF5252;">${o_sl:,.4f}</b></div>'
+                '</div>'
+                '<div style="margin-top: 8px; padding-top: 6px; border-top: 1px solid #1e293b; display: flex; justify-content: space-between; align-items: center; font-size: 11px;">'
+                f'<span style="color: #64748b;">Entrada: {hora_cot_str} ({fecha_cot_str})</span>'
+                f'<span style="color: {pnl_color}; font-weight: bold;">Flotante: {unrealized_pct:+.2f}% (${unrealized_usd:+.2f} USD)</span>'
+                '</div>'
+                '</div>'
+            )
+            cards_html.append(card_item)
+            
+        html_posiciones_abiertas = f'<div class="open-positions-container"><div class="open-pos-grid">{"".join(cards_html)}</div></div>'
+        st.markdown(html_posiciones_abiertas, unsafe_allow_html=True)
     else:
-        st.markdown("""
-            <div style="background: #0b1120; border: 1px solid #1e293b; border-radius: 6px; padding: 14px; text-align: center; color: #64748b; font-size: 12px; margin-bottom: 20px;">
-                ⚪ No hay posiciones abiertas actualmente. Cupo del portafolio 100% disponible (0/3 ocupadas).
-            </div>
-        """, unsafe_allow_html=True)
+        st.markdown(
+            '<div style="background: #0b1120; border: 1px solid #1e293b; border-radius: 6px; padding: 14px; text-align: center; color: #64748b; font-size: 12px; margin-bottom: 20px;">'
+            '⚪ No hay posiciones abiertas actualmente. Cupo del portafolio 100% disponible (0/3 ocupadas).'
+            '</div>',
+            unsafe_allow_html=True
+        )
 
     # -------------------------------------------------------------------------
     # REQUERIMIENTO 1 & 3: TABLA DE HISTORIAL DE OPERACIONES CERRADAS
@@ -1796,16 +1801,17 @@ with tab_history:
     # Columnas: ['ID Orden', 'Fecha Entrada', 'Hora Entrada', 'Hora Salida', 'Par',
     #            'Tipo', 'Precio Entrada', 'Precio Cierre', 'Ganancia ($ USD)', 'Ganancia (%)', 'Resultado']
     # -------------------------------------------------------------------------
-    st.markdown("""
-        <div style="font-size: 13px; font-weight: 800; color: #f8fafc; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">
-            <div style="display: flex; align-items: center; gap: 8px;">
-                <span>📜</span> HISTORIAL DE OPERACIONES CERRADAS (ROW-LEVEL STYLING & ZONA COT)
-            </div>
-            <div style="font-size: 11px; color: #64748b;">
-                Verde: Ganancia (TP) &nbsp;|&nbsp; Rojo: Pérdida (SL) &nbsp;|&nbsp; Gris: Neutro
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
+    st.markdown(
+        '<div style="font-size: 13px; font-weight: 800; color: #f8fafc; margin-bottom: 8px; display: flex; align-items: center; justify-content: space-between;">'
+        '<div style="display: flex; align-items: center; gap: 8px;">'
+        '<span>📜</span> HISTORIAL DE OPERACIONES CERRADAS (ROW-LEVEL STYLING & ZONA COT)'
+        '</div>'
+        '<div style="font-size: 11px; color: #64748b;">'
+        'Verde: Ganancia (TP) &nbsp;|&nbsp; Rojo: Pérdida (SL) &nbsp;|&nbsp; Gris: Neutro'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True
+    )
 
     all_trades_full = fetch_all_trades_supabase(operational_capital=capital)
     closed_trades_only = [
@@ -1814,7 +1820,7 @@ with tab_history:
     ]
 
     if closed_trades_only:
-        # Construcción de filas con HTML de alto impacto visual
+        # Construcción de filas con HTML unificado sin indentaciones Markdown
         rows_html = []
         for t in closed_trades_only:
             o_id = str(t.get("order_id", "N/A"))
@@ -1830,10 +1836,8 @@ with tab_history:
             hora_entrada = dt_cot.strftime("%H:%M:%S")
             
             # Hora Salida (Colombia - COT)
-            # Si existe registro de salida en el diccionario o derivado
             hora_salida = t.get("exit_time_cot")
             if not hora_salida:
-                # Estimada/sincronizada en la misma sesión
                 hora_salida = (dt_cot + datetime.timedelta(minutes=30)).strftime("%H:%M:%S")
                 
             status_str = str(t.get("status", "")).upper()
@@ -1874,53 +1878,52 @@ with tab_history:
                 usd_label = "$0.00 USD"
                 pct_label = "0.00%"
                 
-            side_badge = f'<span class="badge-side-long">LONG</span>' if side == "LONG" else f'<span class="badge-side-short">SHORT</span>'
+            side_badge = '<span class="badge-side-long">LONG</span>' if side == "LONG" else '<span class="badge-side-short">SHORT</span>'
             
             entry_p_str = f"${entry_p:,.4f}" if entry_p < 10 else f"${entry_p:,.2f}"
             exit_p_str = f"${exit_p:,.4f}" if exit_p < 10 else f"${exit_p:,.2f}"
             
-            row_html = f"""
-                <tr class="{row_class}">
-                    <td style="font-weight: 700;">{o_id}</td>
-                    <td>{fecha_entrada}</td>
-                    <td>{hora_entrada}</td>
-                    <td>{hora_salida}</td>
-                    <td style="font-weight: 700;">{sym}</td>
-                    <td>{side_badge}</td>
-                    <td>{entry_p_str}</td>
-                    <td>{exit_p_str}</td>
-                    <td style="font-weight: 800;">{usd_label}</td>
-                    <td style="font-weight: 800;">{pct_label}</td>
-                    <td>{resultado_badge}</td>
-                </tr>
-            """
-            rows_html.append(row_html)
+            row_item = (
+                f'<tr class="{row_class}">'
+                f'<td style="font-weight: 700;">{o_id}</td>'
+                f'<td>{fecha_entrada}</td>'
+                f'<td>{hora_entrada}</td>'
+                f'<td>{hora_salida}</td>'
+                f'<td style="font-weight: 700;">{sym}</td>'
+                f'<td>{side_badge}</td>'
+                f'<td>{entry_p_str}</td>'
+                f'<td>{exit_p_str}</td>'
+                f'<td style="font-weight: 800;">{usd_label}</td>'
+                f'<td style="font-weight: 800;">{pct_label}</td>'
+                f'<td>{resultado_badge}</td>'
+                f'</tr>'
+            )
+            rows_html.append(row_item)
             
-        table_html = f"""
-            <div class="table-responsive-container">
-                <table class="custom-quant-table">
-                    <thead>
-                        <tr>
-                            <th>ID Orden</th>
-                            <th>Fecha Entrada</th>
-                            <th>Hora Entrada</th>
-                            <th>Hora Salida</th>
-                            <th>Par</th>
-                            <th>Tipo</th>
-                            <th>Precio Entrada</th>
-                            <th>Precio Cierre</th>
-                            <th>Ganancia ($ USD)</th>
-                            <th>Ganancia (%)</th>
-                            <th>Resultado</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {"".join(rows_html)}
-                    </tbody>
-                </table>
-            </div>
-        """
-        st.markdown(table_html, unsafe_allow_html=True)
+        cuerpo_tabla = "".join(rows_html)
+        html_tabla = (
+            '<div class="table-responsive-container">'
+            '<table class="custom-quant-table">'
+            '<thead>'
+            '<tr>'
+            '<th>ID Orden</th>'
+            '<th>Fecha Entrada</th>'
+            '<th>Hora Entrada</th>'
+            '<th>Hora Salida</th>'
+            '<th>Par</th>'
+            '<th>Tipo</th>'
+            '<th>Precio Entrada</th>'
+            '<th>Precio Cierre</th>'
+            '<th>Ganancia ($ USD)</th>'
+            '<th>Ganancia (%)</th>'
+            '<th>Resultado</th>'
+            '</tr>'
+            '</thead>'
+            f'<tbody>{cuerpo_tabla}</tbody>'
+            '</table>'
+            '</div>'
+        )
+        st.markdown(html_tabla, unsafe_allow_html=True)
         st.caption("🕒 Horarios convertidos automáticamente a Hora Legal de Colombia (America/Bogota - COT / UTC-5).")
     else:
         st.info("ℹ️ Sin operaciones cerradas registradas en el historial. Las órdenes completadas se pintarán aquí con coloreado completo de fila.")
@@ -1934,15 +1937,9 @@ with tab_history:
     
     if st.session_state.system_logs:
         logs_html = "".join([f"<div style='font-size: 11px; margin-bottom: 4px; color: #93c5fd;'>{log}</div>" for log in st.session_state.system_logs])
-        st.markdown(f"""
-            <div style="background-color: #0b1120; border: 1px solid #1e293b; padding: 12px; border-radius: 6px; max-height: 250px; overflow-y: auto;">
-                {logs_html}
-            </div>
-        """, unsafe_allow_html=True)
+        html_logs = f'<div style="background-color: #0b1120; border: 1px solid #1e293b; padding: 12px; border-radius: 6px; max-height: 250px; overflow-y: auto;">{logs_html}</div>'
+        st.markdown(html_logs, unsafe_allow_html=True)
     else:
         hora_cot_init = get_now_cot().strftime("%H:%M:%S COT")
-        st.markdown(f"""
-            <div style="background-color: #0b1120; border: 1px solid #1e293b; padding: 12px; border-radius: 6px; font-size: 11px; color: #64748b;">
-                [{hora_cot_init}] [INFO] Sistema inicializado. Monitoreando 18 pares de Kraken Spot nativos en USD.
-            </div>
-        """, unsafe_allow_html=True)
+        html_init = f'<div style="background-color: #0b1120; border: 1px solid #1e293b; padding: 12px; border-radius: 6px; font-size: 11px; color: #64748b;">[{hora_cot_init}] [INFO] Sistema inicializado. Monitoreando 18 pares de Kraken Spot nativos en USD.</div>'
+        st.markdown(html_init, unsafe_allow_html=True)
