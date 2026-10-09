@@ -54,6 +54,19 @@ except ImportError:
 def now_cot() -> datetime.datetime:
     return datetime.datetime.now(TZ_COT)
 
+def render_html(html_str: str):
+    """
+    Renderiza HTML de manera segura y limpia en Streamlit.
+    Elimina cualquier sangría inicial de línea, líneas vacías y comentarios
+    que el parser de Markdown suele convertir erróneamente en bloques de código (<pre><code>).
+    """
+    clean_lines = [
+        line.strip()
+        for line in html_str.strip().splitlines()
+        if line.strip() and not line.strip().startswith("<!--")
+    ]
+    st.markdown("".join(clean_lines), unsafe_allow_html=True)
+
 # --------------------------------------------------------------------------------------
 # 3. VARIABLES DE ENTORNO Y CONEXIONES (KRAKEN, SUPABASE, NTFY)
 # --------------------------------------------------------------------------------------
@@ -612,7 +625,7 @@ circuit_active = today_pnl_pct <= (DAILY_CIRCUIT_BREAKER * 100.0)
 # 7. ENCABEZADO INSTITUCIONAL
 # --------------------------------------------------------------------------------------
 hora_cot_str = now_cot().strftime('%H:%M:%S')
-st.markdown(f"""
+render_html(f"""
 <div class="terminal-header">
     <div class="terminal-title-box">
         <div class="terminal-logo-badge">⚡</div>
@@ -637,7 +650,7 @@ st.markdown(f"""
         </div>
     </div>
 </div>
-""", unsafe_allow_html=True)
+""")
 
 # --------------------------------------------------------------------------------------
 # 8. TARJETAS KPI REDISEÑADAS (SIN TEXTOS TRUNCADOS)
@@ -647,7 +660,6 @@ cb_badge_dot = '<div style="width: 8px; height: 8px; border-radius: 50%; backgro
 
 kpi_html = f"""
 <div class="kpi-grid">
-    <!-- Card 1: Capital -->
     <div class="kpi-card">
         <div class="kpi-label">
             <span>Capital Total</span>
@@ -660,7 +672,6 @@ kpi_html = f"""
         </div>
     </div>
 
-    <!-- Card 2: Win Rate -->
     <div class="kpi-card">
         <div class="kpi-label">
             <span>Win Rate Semanal</span>
@@ -675,7 +686,6 @@ kpi_html = f"""
         </div>
     </div>
 
-    <!-- Card 3: PnL Semanal -->
     <div class="kpi-card">
         <div class="kpi-label">
             <span>PnL Neto Semanal</span>
@@ -689,7 +699,6 @@ kpi_html = f"""
         </div>
     </div>
 
-    <!-- Card 4: PnL Hoy (COT) -->
     <div class="kpi-card">
         <div class="kpi-label">
             <span>PnL Hoy (COT)</span>
@@ -703,7 +712,6 @@ kpi_html = f"""
         </div>
     </div>
 
-    <!-- Card 5: Posiciones Abiertas -->
     <div class="kpi-card">
         <div class="kpi-label">
             <span>Posiciones Open</span>
@@ -715,7 +723,6 @@ kpi_html = f"""
         </div>
     </div>
 
-    <!-- Card 6: Circuit Breaker -->
     <div class="kpi-card">
         <div class="kpi-label">
             <span>Circuit Breaker</span>
@@ -731,12 +738,13 @@ kpi_html = f"""
     </div>
 </div>
 """
-st.markdown(kpi_html, unsafe_allow_html=True)
+render_html(kpi_html)
+
 
 # --------------------------------------------------------------------------------------
 # 9. SECCIÓN 1: POSICIONES ACTIVAS (OPEN)
 # --------------------------------------------------------------------------------------
-st.markdown("""
+render_html("""
 <div class="section-header">
     <div class="section-title">
         <span style="color: #38bdf8;">●</span>
@@ -746,14 +754,14 @@ st.markdown("""
         MÁXIMO 3 CONCURRENTES · 1 POR ACTIVO
     </div>
 </div>
-""", unsafe_allow_html=True)
+""")
 
 if df_open.empty:
-    st.markdown("""
+    render_html("""
     <div style="background-color: #080d14; border: 1px dashed #1e293b; border-radius: 8px; padding: 24px; text-align: center; color: #64748b; font-size: 12px; font-family: 'JetBrains Mono'; margin-bottom: 24px;">
         🔍 NINGUNA POSICIÓN ABIERTA · ESCANEANDO LOS 18 PARES EN VELAS DE 15 MINUTOS (FILTRO MACRO 4H ACTIVO)
     </div>
-    """, unsafe_allow_html=True)
+    """)
 else:
     rows_open = []
     for _, row in df_open.iterrows():
@@ -793,12 +801,12 @@ else:
         "</tr></thead>"
         "<tbody>" + "".join(rows_open) + "</tbody></table></div>"
     )
-    st.markdown(table_open_html, unsafe_allow_html=True)
+    render_html(table_open_html)
 
 # --------------------------------------------------------------------------------------
 # 10. SECCIÓN 2: HISTORIAL DE OPERACIONES CERRADAS (COLOREADO INSTITUCIONAL)
 # --------------------------------------------------------------------------------------
-st.markdown("""
+render_html("""
 <div class="section-header">
     <div class="section-title">
         <span style="color: #10b981;">📜</span>
@@ -808,14 +816,14 @@ st.markdown("""
         TAKE PROFIT (+3.0%) · STOP LOSS (-1.5%)
     </div>
 </div>
-""", unsafe_allow_html=True)
+""")
 
 if df_closed.empty:
-    st.markdown("""
+    render_html("""
     <div style="background-color: #080d14; border: 1px dashed #1e293b; border-radius: 8px; padding: 24px; text-align: center; color: #64748b; font-size: 12px; font-family: 'JetBrains Mono'; margin-bottom: 24px;">
         SIN REGISTROS DE ÓRDENES CERRADAS PARA EL CICLO SEMANAL ACTUAL.
     </div>
-    """, unsafe_allow_html=True)
+    """)
 else:
     rows_closed = []
     for _, row in df_closed.iterrows():
@@ -888,12 +896,12 @@ else:
         "</tr></thead>"
         "<tbody>" + "".join(rows_closed) + "</tbody></table></div>"
     )
-    st.markdown(table_closed_html, unsafe_allow_html=True)
+    render_html(table_closed_html)
 
 # --------------------------------------------------------------------------------------
 # 11. CURVA DE CAPITAL (EQUITY CURVE) ESTILO BLOOMBERG TERMINAL
 # --------------------------------------------------------------------------------------
-st.markdown("""
+render_html("""
 <div class="section-header">
     <div class="section-title">
         <span style="color: #38bdf8;">📈</span>
@@ -903,7 +911,8 @@ st.markdown("""
         BASE $1,000.00 USD · MODELO MONTE CARLO / REAL TRACKING
     </div>
 </div>
-""", unsafe_allow_html=True)
+""")
+
 
 if not df_closed.empty:
     df_sorted = df_closed.sort_values(by="created_at", ascending=True).copy()
@@ -967,14 +976,14 @@ if not df_closed.empty:
 # 12. BARRA LATERAL (CENTRO DE CONTROL & AUDIT LOG)
 # --------------------------------------------------------------------------------------
 with st.sidebar:
-    st.markdown("""
+    render_html("""
     <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid #16202e;">
         <span style="font-size: 20px;">🛡️</span>
         <span style="font-size: 13px; font-weight: 800; color: #ffffff; letter-spacing: 0.05em;">RISK MANAGEMENT</span>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
-    st.markdown("""
+    render_html("""
     <div style="font-family: 'JetBrains Mono'; font-size: 11px; color: #94a3b8; line-height: 1.8; background-color: #0b111a; border: 1px solid #16202e; border-radius: 6px; padding: 12px; margin-bottom: 20px;">
         <div><b>EXCHANGE:</b> <span style="color: #38bdf8;">Kraken Spot USD</span></div>
         <div><b>UNIVERSO:</b> <span style="color: #cbd5e1;">18 Activos Top</span></div>
@@ -983,9 +992,9 @@ with st.sidebar:
         <div><b>STOP LOSS:</b> <span style="color: #f43f5e;">-1.50%</span></div>
         <div><b>CIRCUIT BREAKER:</b> <span style="color: #f59e0b;">-3.00% Diario</span></div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
-    st.markdown('<div class="sidebar-section-title">🚨 Protocolo de Emergencia</div>', unsafe_allow_html=True)
+    render_html('<div class="sidebar-section-title">🚨 Protocolo de Emergencia</div>')
     if st.button("🔴 RESET MANUAL (Limpiar Base de Datos)", use_container_width=True):
         if HAS_SUPABASE and supabase_client:
             try:
@@ -1002,7 +1011,7 @@ with st.sidebar:
         time.sleep(1)
         st.rerun()
 
-    st.markdown('<div class="sidebar-section-title">📡 Red de Alertas Push (Ntfy)</div>', unsafe_allow_html=True)
+    render_html('<div class="sidebar-section-title">📡 Red de Alertas Push (Ntfy)</div>')
     if st.button("🔔 Enviar Ping de Prueba", use_container_width=True):
         enviar_notificacion_push(
             "PROYECTO DIPPER | PING",
@@ -1010,6 +1019,7 @@ with st.sidebar:
         )
         st.sidebar.success(f"Enviado a ntfy.sh/{NTFY_TOPIC}")
 
-    st.markdown('<div class="sidebar-section-title">📜 Registro de Auditoría (COT)</div>', unsafe_allow_html=True)
+    render_html('<div class="sidebar-section-title">📜 Registro de Auditoría (COT)</div>')
     log_content = "".join([f"<div class='console-entry'>{l}</div>" for l in st.session_state.logs[:12]])
-    st.markdown(f"<div class='console-box'>{log_content}</div>", unsafe_allow_html=True)
+    render_html(f"<div class='console-box'>{log_content}</div>")
+
