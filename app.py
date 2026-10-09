@@ -24,6 +24,8 @@ import time
 import math
 import logging
 import datetime
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, Any, Tuple, List
 
 import requests
@@ -837,6 +839,48 @@ def execute_trading_cycle():
         except Exception as e:
             logger.error(f"Error general procesando {symbol}: {e}")
 
+# ======================================================================================
+# SECCIÓN 7: SERVIDOR HTTP AUXILIAR PARA HEALTH CHECK (PORT BINDING EN RENDER)
+# ======================================================================================
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    """
+    Manejador HTTP ligero para responder al health check de Render (Status 200 OK en /).
+    Evita timeouts por falta de Port Binding sin interferir con el bucle de trading.
+    """
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(b"PROYECTO DIPPER: Bot de Trading Algoritmico Online - 200 OK\n")
+
+    def log_message(self, format, *args):
+        # Suprimir logs ruidosos de polling de health check para mantener limpio el log principal
+        return
+
+def start_health_check_server():
+    """
+    Inicia el servidor HTTP en un hilo daemon secundario (background thread)
+    usando el puerto especificado en la variable de entorno PORT (o 10000 por defecto).
+    """
+    port_str = os.getenv("PORT", "10000").strip()
+    try:
+        port = int(port_str)
+    except ValueError:
+        port = 10000
+
+    def run_server():
+        try:
+            server_address = ("0.0.0.0", port)
+            httpd = HTTPServer(server_address, HealthCheckHandler)
+            logger.info(f"🌐 Servidor HTTP de Health Check activo en 0.0.0.0:{port} (Port Binding Render OK)")
+            httpd.serve_forever()
+        except Exception as e:
+            logger.error(f"Error iniciando servidor HTTP en puerto {port}: {e}")
+
+    server_thread = threading.Thread(target=run_server, daemon=True, name="RenderHealthCheckServer")
+    server_thread.start()
+
+
 def run_execution_engine():
     """
     Bucle principal de ejecución 24/7 (Execution Engine para Render).
@@ -848,9 +892,12 @@ def run_execution_engine():
     logger.info(f"Intervalo de Ciclo: {CYCLE_SLEEP_SECONDS} segundos (15m)")
     logger.info("==================================================================")
     
+    # Iniciar servidor HTTP en segundo plano para cumplir con el port binding de Render
+    start_health_check_server()
+
     # Enviar alerta de encendido del motor
     send_ntfy_alert(
-        message="🟢 El Execution Engine 24/7 de Proyecto Dipper ha iniciado operaciones en la nube.",
+        message="🟢 El Execution Engine 24/7 de Proyecto Dipper ha iniciado operaciones en la nube con Port Binding activo.",
         title="PROYECTO DIPPER | BOT ONLINE",
         priority="default"
     )
