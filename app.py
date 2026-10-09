@@ -448,22 +448,7 @@ st.markdown("### 🟢 Posiciones Activas (OPEN)")
 if df_open.empty:
     st.info("Sin posiciones activas en este momento. El bot está escaneando los 18 pares en velas de 15m con filtro macro 4H.")
 else:
-    html_open = """
-    <table class="quant-table">
-        <thead>
-            <tr>
-                <th>ID Orden</th>
-                <th>Par</th>
-                <th>Tipo</th>
-                <th>Precio Entrada</th>
-                <th>PnL No Realizado ($)</th>
-                <th>PnL No Realizado (%)</th>
-                <th>Hora Apertura (COT)</th>
-                <th>Estado</th>
-            </tr>
-        </thead>
-        <tbody>
-    """
+    rows_open_html = []
     for _, row in df_open.iterrows():
         pnl_val = float(row.get('pnl_usd', 0.0))
         pnl_pct = float(row.get('pnl_pct', 0.0))
@@ -478,19 +463,27 @@ else:
         except Exception:
             entry_cot = entry_time_str[:19]
 
-        html_open += f"""
-        <tr class="row-open">
-            <td><b>{row.get('order_id', '-')}</b></td>
-            <td><b style="color: #38bdf8;">{row.get('symbol', '-')}</b></td>
-            <td><span style="color: {'#00E676' if row.get('side') == 'LONG' else '#FF5252'}; font-weight: bold;">{row.get('side', '-')}</span></td>
-            <td>${float(row.get('entry_price', 0.0)):,.4f}</td>
-            <td style="color: {pnl_color}; font-weight: bold;">{pnl_str}</td>
-            <td style="color: {pnl_color}; font-weight: bold;">{pnl_pct:+.2f}%</td>
-            <td>{entry_cot}</td>
-            <td><span class="badge-open">OPEN</span></td>
-        </tr>
-        """
-    html_open += "</tbody></table>"
+        rows_open_html.append(
+            f"<tr class=\"row-open\">"
+            f"<td><b>{row.get('order_id', '-')}</b></td>"
+            f"<td><b style=\"color: #38bdf8;\">{row.get('symbol', '-')}</b></td>"
+            f"<td><span style=\"color: {'#00E676' if row.get('side') == 'LONG' else '#FF5252'}; font-weight: bold;\">{row.get('side', '-')}</span></td>"
+            f"<td>${float(row.get('entry_price', 0.0)):,.4f}</td>"
+            f"<td style=\"color: {pnl_color}; font-weight: bold;\">{pnl_str}</td>"
+            f"<td style=\"color: {pnl_color}; font-weight: bold;\">{pnl_pct:+.2f}%</td>"
+            f"<td>{entry_cot}</td>"
+            f"<td><span class=\"badge-open\">OPEN</span></td>"
+            f"</tr>"
+        )
+    
+    html_open = (
+        "<table class=\"quant-table\">"
+        "<thead><tr>"
+        "<th>ID Orden</th><th>Par</th><th>Tipo</th><th>Precio Entrada</th>"
+        "<th>PnL No Realizado ($)</th><th>PnL No Realizado (%)</th><th>Hora Apertura (COT)</th><th>Estado</th>"
+        "</tr></thead>"
+        "<tbody>" + "".join(rows_open_html) + "</tbody></table>"
+    )
     st.markdown(html_open, unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------------------
@@ -501,26 +494,7 @@ st.markdown("### 📜 Historial de Operaciones Cerradas (Ciclo Semanal)")
 if df_closed.empty:
     st.info("No se registran operaciones cerradas en la semana en curso.")
 else:
-    html_closed = """
-    <table class="quant-table">
-        <thead>
-            <tr>
-                <th>ID Orden</th>
-                <th>Fecha Entrada</th>
-                <th>Hora Entrada</th>
-                <th>Hora Salida</th>
-                <th>Par</th>
-                <th>Tipo</th>
-                <th>Precio Entrada</th>
-                <th>Precio Cierre</th>
-                <th>Ganancia ($ USD)</th>
-                <th>Ganancia (%)</th>
-                <th>Resultado</th>
-            </tr>
-        </thead>
-        <tbody>
-    """
-    
+    rows_closed_html = []
     for _, row in df_closed.iterrows():
         pnl_val = float(row.get('pnl_usd', 0.0))
         pnl_pct = float(row.get('pnl_pct', 0.0))
@@ -561,23 +535,31 @@ else:
         except Exception:
             hora_out = closed_str[11:19] if len(closed_str) >= 19 else "-"
 
-        html_closed += f"""
-        <tr class="{row_class}">
-            <td><b>{row.get('order_id', '-')}</b></td>
-            <td>{fecha_in}</td>
-            <td>{hora_in}</td>
-            <td>{hora_out}</td>
-            <td><b>{row.get('symbol', '-')}</b></td>
-            <td><b>{row.get('side', '-')}</b></td>
-            <td>${float(row.get('entry_price', 0.0)):,.4f}</td>
-            <td>${float(row.get('exit_price', 0.0)):,.4f}</td>
-            <td><b>{gain_usd_str}</b></td>
-            <td><b>{gain_pct_str}</b></td>
-            <td>{badge}</td>
-        </tr>
-        """
+        rows_closed_html.append(
+            f"<tr class=\"{row_class}\">"
+            f"<td><b>{row.get('order_id', '-')}</b></td>"
+            f"<td>{fecha_in}</td>"
+            f"<td>{hora_in}</td>"
+            f"<td>{hora_out}</td>"
+            f"<td><b>{row.get('symbol', '-')}</b></td>"
+            f"<td><b>{row.get('side', '-')}</b></td>"
+            f"<td>${float(row.get('entry_price', 0.0)):,.4f}</td>"
+            f"<td>${float(row.get('exit_price', 0.0)):,.4f}</td>"
+            f"<td><b>{gain_usd_str}</b></td>"
+            f"<td><b>{gain_pct_str}</b></td>"
+            f"<td>{badge}</td>"
+            f"</tr>"
+        )
         
-    html_closed += "</tbody></table>"
+    html_closed = (
+        "<table class=\"quant-table\">"
+        "<thead><tr>"
+        "<th>ID Orden</th><th>Fecha Entrada</th><th>Hora Entrada</th><th>Hora Salida</th>"
+        "<th>Par</th><th>Tipo</th><th>Precio Entrada</th><th>Precio Cierre</th>"
+        "<th>Ganancia ($ USD)</th><th>Ganancia (%)</th><th>Resultado</th>"
+        "</tr></thead>"
+        "<tbody>" + "".join(rows_closed_html) + "</tbody></table>"
+    )
     st.markdown(html_closed, unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------------------
