@@ -1003,7 +1003,67 @@ def kill_switch_close_all():
     enviar_notificacion_push("🚨 KILL SWITCH ACTIVADO", f"Se han liquidado forzosamente {count} posiciones abiertas para resguardo de capital.")
     st.error(f"🚨 KILL SWITCH EJECUTADO: {count} posiciones cerradas de emergencia.")
 
-# Ejecución periódica del trailing stop
+def execute_autonomous_market_scan(verbose: bool = False) -> List[str]:
+    """
+    Escanea la Watchlist de 18 pares y abre automáticamente posiciones
+    si se cumplen todas las condiciones de confluencia:
+    - No superar el límite de 3 posiciones abiertas.
+    - No superar el Circuit Breaker diario (-3.0%).
+    - Tendencia Macro 4H alineada con Gatillo Micro 15M (RSI, SMC, Volumen).
+    - Spread en Kraken < 0.15%.
+    """
+    scan_logs = []
+    df_current = load_trades_data()
+    open_trades = df_current[df_current['status'] == 'OPEN'] if not df_current.empty else pd.DataFrame()
+    open_count = len(open_trades)
+
+    if open_count >= MAX_CONCURRENT_POSITIONS:
+        msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [PORTAFOLIO COMPLETO] 3 de 3 posiciones abiertas. Nuevas entradas en pausa."
+        scan_logs.append(msg)
+        return scan_logs
+
+    open_symbols = set(open_trades['symbol'].tolist()) if not open_trades.empty else set()
+    slots_left = MAX_CONCURRENT_POSITIONS - open_count
+
+    for sym in WATCHLIST_18:
+        if slots_left <= 0:
+            break
+        if sym in open_symbols:
+            continue
+
+        confl = evaluate_micro_confluence_15m(sym)
+        act = confl.get("action", "HOLD")
+
+        if act in ["LONG", "SHORT"]:
+            cur_p = BASE_PRICES.get(sym, 100.0)
+            atr_u = confl.get("atr_pct", 0.02)
+            oid = save_new_trade(sym, act, cur_p, atr_u)
+            if oid:
+                open_symbols.add(sym)
+                slots_left -= 1
+                msg_ok = f"[{now_cot().strftime('%H:%M:%S COT')}] [AUTO-TRADE] ¡Orden generada en {sym} ({act}) por confluencia!"
+                scan_logs.append(msg_ok)
+        elif verbose:
+            scan_logs.append(f"[{now_cot().strftime('%H:%M:%S COT')}] [SCANNER] {sym}: {confl.get('reason', 'Sin confluencia')}")
+
+    return scan_logs
+
+def run_autonomous_trading_daemon():
+    """Hilo demonio que ejecuta el escáner y trailing stop de forma continua cada 15 minutos."""
+    while True:
+        try:
+            execute_autonomous_market_scan(verbose=False)
+            apply_trailing_stop_to_breakeven()
+        except Exception:
+            pass
+        time.sleep(900)
+
+if "trading_daemon_initialized" not in st.session_state:
+    st.session_state.trading_daemon_initialized = True
+    t_trade = threading.Thread(target=run_autonomous_trading_daemon, daemon=True)
+    t_trade.start()
+
+# Ejecución periódica del trailing stop al cargar interfaz
 apply_trailing_stop_to_breakeven()
 
 # --------------------------------------------------------------------------------------
@@ -1307,6 +1367,15 @@ with tab_resumen:
                 st.cache_data.clear()
                 st.session_state.logs.insert(0, f"[{now_cot().strftime('%H:%M:%S COT')}] [ACTION] Datos de mercado refrescados.")
                 st.rerun()
+
+        if st.button("⚡ ESCANEAR Y OPERAR 18 PARES AHORA", use_container_width=True):
+            st.cache_data.clear()
+            scan_res = execute_autonomous_market_scan(verbose=True)
+            for r in scan_res:
+                st.session_state.logs.insert(0, r)
+            st.success("Escaneo completado. Revisa el registro de auditoría.")
+            time.sleep(0.5)
+            st.rerun()
 
 # ======================================================================================
 # PESTAÑA 2: 📈 GRÁFICOS & ANÁLISIS (EQUITY CURVE, PNL POR ACTIVO, CANDLESTICKS 15M)
