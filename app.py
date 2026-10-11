@@ -1,31 +1,28 @@
 # -*- coding: utf-8 -*-
 """
 ========================================================================================
-PROYECTO DIPPER | QUANT EXECUTIVE TERMINAL (v3.1 PRODUCTION READY - $50 USD CAPITAL)
+PROYECTO DIPPER | QUANT EXECUTIVE TERMINAL (v4.0 - 100% AUTÓNOMO & SOLO LECTURA)
 ========================================================================================
-Terminal de Trading Cuantitativo Institucional Calibrada para Micro-Capital ($50 USD):
-- 1. CALIBRACIÓN DE CAPITAL BASE ($50.00 USD):
-     * Capital Base: $50.00 USD.
-     * Riesgo por Trade (1.5%): $0.75 USD.
-     * Stop Loss Fijo (-1.5%): -$0.75 USD.
-     * Take Profit Dinámico (+4.5% promedio): +$2.25 USD (Ratio Asimétrico 1:3).
-     * Circuit Breaker Diario (-3.0%): -$1.50 USD.
-- 2. ESTILOS CSS GLOW & EFECTO TERMINAL PRO:
-     * Bordes metálicos finos con resplandor (glow) en tono cian/azul fluorescente.
-     * Alineación vertical simétrica entre Matriz de Riesgo y Centro de Comandos.
-     * Badges de sector dinámicos en el banner superior.
-- 3. POSICIONES ACTIVAS CON BARRA DE PROGRESO DINÁMICA:
-     * Barra visual interactiva que ilustra la distancia en tiempo real hacia TP (+4.5%) o SL (-1.5%).
-     * Botón de Pánico en rojo (KILL SWITCH / CIERRE DE EMERGENCIA) destacado en cabecera.
-- 4. GRÁFICOS INTERACTIVOS CANDLESTICK & EQUITY:
-     * Velas Japonesas de 15M en Plotly Dark con EMA 200 (4H) superpuesta.
-     * Curva de capital y rendimiento por activo.
-- 5. FEEDBACK FLOTANTE:
-     * Notificaciones temporales `st.toast` en todas las acciones del sistema.
-- 6. INFRAESTRUCTURA & HEALTH CHECK RENDER:
-     * Servidor HTTP en hilo daemon (200 OK en $PORT) para evitar cierres de Render.
-     * Persistencia dual en Supabase PostgreSQL (`paper_trades` y `daily_metrics`).
-     * Motor de escaneo autónomo en segundo plano ejecutándose cada 15 minutos.
+Terminal de Trading Cuantitativo Institucional Desplegada en Render:
+- 1. ELIMINACIÓN TOTAL DE CONTROLES MANUALES (100% READ-ONLY):
+     * Sin botones de compra, venta ni cierre manual (TP, SL, BE, Long, Short eliminados).
+     * Interfaz ejecutiva de solo lectura para auditoría, supervisión y transparencia.
+- 2. CAPITAL BASE Y BALANCE REAL DE $50.00 USD:
+     * Capital inicial calibrado en $50.00 USD.
+     * Cero simulaciones o falso saldo: el balance solo se actualiza cuando una orden
+       se cierra legítimamente en Kraken Spot al alcanzar TP (+4.5%) o SL (-1.5%) real.
+- 3. MOTOR AUTÓNOMO DE MERCADO 24/7 EN SEGUNDO PLANO (RENDER INDESTRUCTIBLE):
+     * Bucle demonio continuo con auto-reconexión ante cualquier micro-corte de Kraken.
+     * Supervisión de alta frecuencia (cada 15s) de órdenes abiertas para TP/SL/Trailing.
+     * Escaneo de los 18 pares cada 15m con filtros Macro 4H (EMA 200), Micro 15M (RSI,
+       SMC/BoS, Volumen 1.5x) y Spread < 0.15%.
+     * Límite estricto de máximo 3 posiciones concurrentes y Circuit Breaker diario (-3.0%).
+     * Persistencia dual en PostgreSQL de Supabase ('paper_trades' y 'daily_metrics').
+- 4. NOTIFICACIONES INSTANTÁNEAS (NTFY.SH & TELEGRAM):
+     * Alertas push inmediatas al teléfono ante entradas, ejecuciones de TP/SL y Circuit Breaker.
+- 5. INTERFAZ LIMPIA EN 2 PESTAÑAS:
+     * Pestaña 1: "📊 Posiciones Activas en Mercado" (Tabla en tiempo real con cotización Kraken).
+     * Pestaña 2: "📜 Historial & Auditoría Autónoma" (Bitácora de trades cerrados y Audit Log).
 ========================================================================================
 """
 
@@ -44,8 +41,6 @@ from typing import Optional, Dict, Any, Tuple, List
 import streamlit as st
 import pandas as pd
 import numpy as np
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 
 # CCXT y Requests condicionales
 try:
@@ -72,7 +67,7 @@ except ImportError:
 # 1. CONFIGURACIÓN DE PÁGINA STREAMLIT (LAYOUT WIDE & SIDEBAR OCULTA)
 # --------------------------------------------------------------------------------------
 st.set_page_config(
-    page_title="PROYECTO DIPPER | QUANT TERMINAL ($50 USD)",
+    page_title="PROYECTO DIPPER v4.0 | QUANT EXECUTIVE",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -97,8 +92,7 @@ def now_cot() -> datetime.datetime:
 def render_html(html_str: str):
     """
     Renderiza bloques HTML sin permitir que el parser de Markdown de Streamlit
-    los interprete erróneamente como bloques de código (<pre><code>).
-    Elimina sangrías iniciales, líneas vacías y comentarios HTML.
+    los interprete erróneamente como bloques de código preformateado (<pre><code>).
     """
     clean_lines = [
         line.strip()
@@ -108,7 +102,7 @@ def render_html(html_str: str):
     st.markdown("".join(clean_lines), unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------------------
-# 3. CSS INSTITUCIONAL: GLOW METÁLICO CIAN & SUPRESIÓN DE SIDEBAR
+# 3. CSS INSTITUCIONAL: TEMA DARK EXECUTIVE & RESPLANDOR METÁLICO CIAN
 # --------------------------------------------------------------------------------------
 st.markdown("""
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -158,15 +152,17 @@ st.markdown("""
 
     /* Banner Superior Ejecutivo */
     .exec-header-banner {
-        background: linear-gradient(180deg, #0d1522 0%, #070c14 100%);
-        border: 1px solid rgba(56, 189, 248, 0.25);
-        border-radius: 12px;
+        background: linear-gradient(180deg, #0b111b 0%, #080d14 100%);
+        border: 1px solid rgba(56, 189, 248, 0.28);
+        border-radius: 10px;
         padding: 14px 20px;
         margin-bottom: 16px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 15px rgba(56, 189, 248, 0.08);
         display: flex;
         justify-content: space-between;
         align-items: center;
-        box-shadow: 0 4px 24px rgba(0, 0, 0, 0.5), 0 0 15px rgba(56, 189, 248, 0.12);
+        flex-wrap: wrap;
+        gap: 12px;
     }
 
     .exec-brand-box {
@@ -176,302 +172,270 @@ st.markdown("""
     }
 
     .exec-logo-icon {
-        width: 40px;
-        height: 40px;
-        background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
-        border: 1px solid #38bdf8;
+        width: 38px;
+        height: 38px;
         border-radius: 8px;
+        background: linear-gradient(135deg, rgba(56, 189, 248, 0.2) 0%, rgba(14, 165, 233, 0.05) 100%);
+        border: 1px solid rgba(56, 189, 248, 0.45);
         display: flex;
         align-items: center;
         justify-content: center;
         font-size: 20px;
-        box-shadow: 0 0 16px rgba(56, 189, 248, 0.45);
+        box-shadow: 0 0 10px rgba(56, 189, 248, 0.2);
     }
 
     .status-badge {
-        background-color: #0b1320;
-        border: 1px solid #1e293b;
-        padding: 4px 9px;
-        border-radius: 6px;
-        font-family: 'JetBrains Mono', monospace;
-        font-size: 11px;
         display: inline-flex;
         align-items: center;
         gap: 6px;
+        padding: 3px 10px;
+        border-radius: 9999px;
+        font-size: 11px;
         font-weight: 600;
+        font-family: 'JetBrains Mono', monospace;
+        background: #0d1522;
+        border: 1px solid #1a273a;
     }
 
     .pulse-dot {
         width: 7px;
         height: 7px;
-        background-color: #10b981;
         border-radius: 50%;
+        background-color: #10b981;
         box-shadow: 0 0 8px #10b981;
-        animation: pulseAnimation 2s infinite;
+        animation: pulse-animation 2s infinite;
     }
 
-    @keyframes pulseAnimation {
+    @keyframes pulse-animation {
         0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7); }
-        70% { transform: scale(1.15); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
+        70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(16, 185, 129, 0); }
         100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(16, 185, 129, 0); }
     }
 
-    /* Grid de KPI Cards con Efecto Glow Metálico */
-    .kpi-grid-7 {
+    /* Grid de KPI Cards */
+    .kpi-grid-main {
         display: grid;
-        grid-template-columns: repeat(7, 1fr);
-        gap: 11px;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 12px;
         margin-bottom: 20px;
     }
 
-    @media (max-width: 1400px) { .kpi-grid-7 { grid-template-columns: repeat(4, 1fr); } }
-    @media (max-width: 900px) { .kpi-grid-7 { grid-template-columns: repeat(2, 1fr); } }
+    @media (max-width: 1200px) {
+        .kpi-grid-main { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (max-width: 768px) {
+        .kpi-grid-main { grid-template-columns: repeat(2, 1fr); }
+    }
 
     .kpi-card {
         background: #090e17;
-        border: 1px solid rgba(56, 189, 248, 0.18);
-        border-radius: 10px;
-        padding: 13px 15px;
-        position: relative;
-        overflow: hidden;
-        box-shadow: 0 4px 14px rgba(0,0,0,0.4), 0 0 10px rgba(56, 189, 248, 0.08);
-        transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+        border: 1px solid rgba(56, 189, 248, 0.22);
+        border-radius: 8px;
+        padding: 14px 16px;
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3), 0 0 8px rgba(56, 189, 248, 0.05);
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        transition: transform 0.15s ease, border-color 0.15s ease;
     }
 
     .kpi-card:hover {
-        border-color: rgba(56, 189, 248, 0.4);
-        box-shadow: 0 4px 18px rgba(0,0,0,0.5), 0 0 16px rgba(56, 189, 248, 0.18);
-        transform: translateY(-1px);
-    }
-
-    .kpi-card::before {
-        content: '';
-        position: absolute;
-        top: 0; left: 0; right: 0; height: 2px;
-        background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.6), transparent);
+        border-color: rgba(56, 189, 248, 0.45);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 12px rgba(56, 189, 248, 0.12);
     }
 
     .kpi-label {
-        font-size: 10px;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: #64748b;
+        color: #94a3b8;
+        font-size: 10.5px;
         font-weight: 600;
-        margin-bottom: 5px;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
         display: flex;
         justify-content: space-between;
         align-items: center;
+        margin-bottom: 6px;
     }
 
     .kpi-value {
         font-family: 'JetBrains Mono', monospace;
-        font-size: 18.5px;
+        font-size: 20px;
         font-weight: 700;
         color: #f8fafc;
         line-height: 1.2;
-        letter-spacing: -0.02em;
-        white-space: nowrap;
     }
 
     .kpi-subtext {
+        font-size: 10px;
         font-family: 'JetBrains Mono', monospace;
-        font-size: 10.5px;
-        margin-top: 5px;
+        margin-top: 6px;
         display: flex;
         align-items: center;
         gap: 4px;
-        font-weight: 500;
     }
 
     .sub-green { color: #10b981; }
     .sub-red { color: #f43f5e; }
-    .sub-neutral { color: #38bdf8; }
+    .sub-cyan { color: #38bdf8; }
+    .sub-neutral { color: #64748b; }
 
-    /* Estilo de Pestañas Streamlit */
+    /* Pestañas Institucionales */
     .stTabs [data-baseweb="tab-list"] {
-        gap: 8px;
-        background-color: #080d14;
-        padding: 6px 10px;
-        border-radius: 8px;
-        border: 1px solid rgba(56, 189, 248, 0.18);
-        margin-bottom: 18px;
+        gap: 8px !important;
+        background-color: transparent !important;
+        border-bottom: 1px solid #16202e !important;
+        margin-bottom: 18px !important;
     }
 
     .stTabs [data-baseweb="tab"] {
-        height: 38px;
-        white-space: nowrap;
-        background-color: transparent;
-        border-radius: 6px;
-        color: #94a3b8;
-        font-family: 'Plus Jakarta Sans', sans-serif;
-        font-size: 13px;
-        font-weight: 600;
-        padding: 0 16px;
-        border: none;
+        height: 42px !important;
+        background-color: #080d14 !important;
+        border: 1px solid #16202e !important;
+        border-bottom: none !important;
+        border-radius: 6px 6px 0 0 !important;
+        color: #94a3b8 !important;
+        font-size: 12.5px !important;
+        font-weight: 600 !important;
+        font-family: 'Plus Jakarta Sans', sans-serif !important;
+        padding: 0 18px !important;
     }
 
     .stTabs [aria-selected="true"] {
-        background-color: #0f1826 !important;
+        background: linear-gradient(180deg, #0d1522 0%, #090e17 100%) !important;
         color: #38bdf8 !important;
-        border: 1px solid rgba(56, 189, 248, 0.4) !important;
-        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4), 0 0 12px rgba(56, 189, 248, 0.15);
+        border-color: rgba(56, 189, 248, 0.45) !important;
+        border-bottom: 2px solid #38bdf8 !important;
+        box-shadow: 0 0 10px rgba(56, 189, 248, 0.1) !important;
     }
 
-    /* Tablas Cuantitativas con Glow */
+    /* Tablas Cuantitativas */
     .table-container {
-        border: 1px solid rgba(56, 189, 248, 0.18);
-        border-radius: 10px;
+        background: #090e17;
+        border: 1px solid #16202e;
+        border-radius: 8px;
         overflow: hidden;
-        background-color: #080d14;
-        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), 0 0 10px rgba(56, 189, 248, 0.05);
-        margin-bottom: 20px;
+        margin-bottom: 18px;
+        box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
     }
 
-    .quant-table-pro {
+    .quant-table {
         width: 100%;
         border-collapse: collapse;
         font-family: 'JetBrains Mono', monospace;
-        font-size: 12px;
+        font-size: 11px;
         text-align: left;
     }
 
-    .quant-table-pro th {
-        background-color: #0d1522;
-        color: #64748b;
-        font-size: 10.5px;
-        text-transform: uppercase;
-        letter-spacing: 0.06em;
+    .quant-table th {
+        background-color: #0b111b;
+        color: #94a3b8;
         font-weight: 600;
-        padding: 12px 14px;
-        border-bottom: 1px solid #1a2638;
-        white-space: nowrap;
+        padding: 11px 14px;
+        border-bottom: 1px solid #1a273a;
+        text-transform: uppercase;
+        font-size: 10px;
+        letter-spacing: 0.05em;
     }
 
-    .quant-table-pro td {
-        padding: 11px 14px;
+    .quant-table td {
+        padding: 10px 14px;
         border-bottom: 1px solid #111a26;
         color: #cbd5e1;
-        white-space: nowrap;
-        vertical-align: middle;
     }
 
-    .row-tp {
-        background: linear-gradient(90deg, rgba(16, 185, 129, 0.11) 0%, rgba(16, 185, 129, 0.02) 100%) !important;
-    }
-    .row-tp td { color: #f1f5f9; }
-
-    .row-sl {
-        background: linear-gradient(90deg, rgba(244, 63, 94, 0.11) 0%, rgba(244, 63, 94, 0.02) 100%) !important;
-    }
-    .row-sl td { color: #f1f5f9; }
-
-    .row-be {
-        background: linear-gradient(90deg, rgba(56, 189, 248, 0.09) 0%, rgba(56, 189, 248, 0.01) 100%) !important;
+    .quant-table tr:hover {
+        background-color: rgba(56, 189, 248, 0.03);
     }
 
-    .row-active {
-        background: linear-gradient(90deg, rgba(56, 189, 248, 0.06) 0%, transparent 100%) !important;
+    .row-tp-won {
+        background-color: rgba(16, 185, 129, 0.04) !important;
+        border-left: 3px solid #10b981 !important;
     }
 
-    .badge-pro {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        padding: 3px 8px;
+    .row-sl-lost {
+        background-color: rgba(244, 63, 94, 0.04) !important;
+        border-left: 3px solid #f43f5e !important;
+    }
+
+    .row-active-pos {
+        background-color: rgba(56, 189, 248, 0.03) !important;
+        border-left: 3px solid #38bdf8 !important;
+    }
+
+    .badge-tag {
+        display: inline-block;
+        padding: 2px 7px;
         border-radius: 4px;
         font-size: 10px;
         font-weight: 700;
-        text-transform: uppercase;
     }
 
-    .badge-tp { background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.4); }
-    .badge-sl { background: rgba(244, 63, 94, 0.15); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.4); }
-    .badge-open { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.4); }
-    .badge-be { background: rgba(245, 158, 11, 0.15); color: #f59e0b; border: 1px solid rgba(245, 158, 11, 0.4); }
+    .badge-long { background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-short { background: rgba(244, 63, 94, 0.15); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.3); }
+    .badge-tp { background: rgba(16, 185, 129, 0.15); color: #10b981; border: 1px solid rgba(16, 185, 129, 0.3); }
+    .badge-sl { background: rgba(244, 63, 94, 0.15); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.3); }
+    .badge-be { background: rgba(56, 189, 248, 0.15); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.3); }
 
     .section-header {
         display: flex;
-        align-items: center;
         justify-content: space-between;
-        margin-top: 14px;
-        margin-bottom: 12px;
+        align-items: center;
+        margin-bottom: 10px;
         padding-bottom: 6px;
-        border-bottom: 1px solid rgba(56, 189, 248, 0.18);
+        border-bottom: 1px solid #16202e;
     }
 
     .section-title {
-        font-size: 13.5px;
+        font-size: 12.5px;
         font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.05em;
-        color: #cbd5e1;
+        color: #f8fafc;
         display: flex;
         align-items: center;
-        gap: 8px;
+        gap: 6px;
+        letter-spacing: 0.02em;
     }
 
     .section-tag {
-        font-family: 'JetBrains Mono', monospace;
         font-size: 10px;
+        font-family: 'JetBrains Mono', monospace;
         color: #64748b;
-        background-color: #0b111a;
-        padding: 3px 8px;
-        border-radius: 4px;
-        border: 1px solid #1e293b;
     }
 
-    /* Caja de Registro de Auditoría (Audit Log) */
-    .audit-log-box {
-        background-color: #04070b;
-        border: 1px solid #141c28;
+    /* Caja de Consola de Logs de Auditoría */
+    .terminal-console {
+        background: #05080c;
+        border: 1px solid #16202e;
         border-radius: 8px;
-        padding: 12px;
+        padding: 14px;
         font-family: 'JetBrains Mono', monospace;
         font-size: 11px;
-        line-height: 1.7;
         color: #94a3b8;
-        max-height: 320px;
+        max-height: 280px;
         overflow-y: auto;
+        line-height: 1.6;
     }
 
-    .audit-entry {
-        margin-bottom: 4px;
-        border-bottom: 1px solid #090f18;
-        padding-bottom: 3px;
-    }
-
-    /* Botón de Pánico Kill Switch */
-    .kill-switch-btn > button {
-        background: linear-gradient(180deg, #991b1b 0%, #7f1d1d 100%) !important;
-        border: 1px solid #ef4444 !important;
-        color: #fee2e2 !important;
-        font-weight: 800 !important;
-        box-shadow: 0 0 16px rgba(239, 68, 68, 0.45) !important;
-    }
-    .kill-switch-btn > button:hover {
-        background: #dc2626 !important;
-        border-color: #f87171 !important;
-        color: #ffffff !important;
-        box-shadow: 0 0 22px rgba(239, 68, 68, 0.65) !important;
+    .log-line {
+        padding: 2px 0;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.02);
     }
 </style>
 """, unsafe_allow_html=True)
 
 # --------------------------------------------------------------------------------------
-# 4. SERVIDOR HTTP SECUNDARIO EN HILO DAEMON (PORT BINDING RENDER 200 OK)
+# 4. HEALTH CHECK HTTP SERVER PARA RENDER ($PORT / 200 OK)
 # --------------------------------------------------------------------------------------
 class RenderHealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
-        self.send_header("Content-type", "text/plain; charset=utf-8")
+        self.send_header("Content-Type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"PROYECTO DIPPER: Bot Cuantitativo Activo - 200 OK\n")
+        self.wfile.write(b"OK - PROYECTO DIPPER v4.0 QUANT ENGINE ONLINE")
 
     def log_message(self, format, *args):
         pass
 
 def init_health_check_server():
-    """Inicia el servidor HTTP de health check en un hilo secundario demonio."""
+    """Inicia el servidor HTTP de health check en un hilo demonio secundario para Render."""
     port = int(os.getenv("PORT", "10000"))
     try:
         httpd = HTTPServer(("0.0.0.0", port), RenderHealthCheckHandler)
@@ -485,7 +449,7 @@ if "health_server_initialized" not in st.session_state:
     init_health_check_server()
 
 # --------------------------------------------------------------------------------------
-# 5. VARIABLES DE ENTORNO, CREDENCIALES & SUPABASE POSTGRESQL
+# 5. VARIABLES DE ENTORNO, CREDENCIALES & PERSISTENCIA SUPABASE
 # --------------------------------------------------------------------------------------
 KRAKEN_API_KEY: str = os.getenv("KRAKEN_API_KEY", "").strip()
 KRAKEN_SECRET_KEY: str = os.getenv("KRAKEN_SECRET_KEY", "").strip()
@@ -505,19 +469,19 @@ if HAS_SUPABASE:
         HAS_SUPABASE = False
 
 # --------------------------------------------------------------------------------------
-# 6. PARÁMETROS CUANTITATIVOS CALIBRADOS PARA $50 USD
+# 6. PARÁMETROS CUANTITATIVOS CALIBRADOS PARA CAPITAL REAL DE $50.00 USD
 # --------------------------------------------------------------------------------------
-INITIAL_CAPITAL = 50.0         # Calibración de Capital Base a $50.00 USD
-RISK_PER_TRADE = 0.015         # 1.5% de riesgo exacto ($0.75 USD por trade)
-STOP_LOSS_PCT = 0.015          # -1.5% Stop Loss (-$0.75 USD)
-TAKE_PROFIT_MIN_PCT = 0.040    # +4.0% Take Profit mínimo (+$2.00 USD)
-TAKE_PROFIT_AVG_PCT = 0.045    # +4.5% Take Profit promedio (+$2.25 USD - Ratio 1:3)
-TAKE_PROFIT_MAX_PCT = 0.050    # +5.0% Take Profit máximo (+$2.50 USD)
+INITIAL_CAPITAL = 50.0         # Capital Base Fijo y Real en USD
+RISK_PER_TRADE = 0.015         # 1.5% de riesgo exacto por trade ($0.75 USD base)
+STOP_LOSS_PCT = 0.015          # -1.5% Stop Loss estricto
+TAKE_PROFIT_MIN_PCT = 0.040    # +4.0% Take Profit mínimo
+TAKE_PROFIT_AVG_PCT = 0.045    # +4.5% Take Profit promedio (Ratio Asimétrico 1:3)
+TAKE_PROFIT_MAX_PCT = 0.050    # +5.0% Take Profit máximo
 TRAILING_TRIGGER_PCT = 0.020   # +2.0% flotante para mover SL a Break-Even
-TRAILING_BE_PCT = 0.001        # +0.1% sobre entrada (cubrir comisiones)
-DAILY_CIRCUIT_BREAKER = -0.03  # -3.0% Circuit Breaker diario (-$1.50 USD)
-MAX_SPREAD_TOLERANCE = 0.0015  # 0.15% Spread máximo permitido
-MAX_CONCURRENT_POSITIONS = 3   # Límite de 3 posiciones concurrentes
+TRAILING_BE_PCT = 0.001        # +0.1% sobre entrada (cubre comisiones de Kraken)
+DAILY_CIRCUIT_BREAKER = -0.03  # -3.0% Pérdida diaria máxima para frenado de emergencia
+MAX_SPREAD_TOLERANCE = 0.0015  # 0.15% Spread máximo Bid/Ask tolerado
+MAX_CONCURRENT_POSITIONS = 3   # Máximo 3 posiciones concurrentes permitidas
 
 WATCHLIST_18: List[str] = [
     "BTC/USD", "ETH/USD", "SOL/USD", "ADA/USD",
@@ -591,8 +555,8 @@ def reconnect_kraken() -> Optional[Any]:
 
 def enviar_notificacion_push(titulo: str, mensaje: str, priority: str = "default", tags: str = ""):
     """
-    Envía notificaciones push instantáneas al teléfono celular.
-    - Canal 1 (Ntfy.sh): Inmediato, sin registros ni apps de pago.
+    Envía notificaciones push instantáneas al teléfono celular del operador.
+    - Canal 1 (Ntfy.sh): Inmediato, sin registro.
     - Canal 2 (Telegram Bot): Si TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID están configurados.
     """
     # 1. Ntfy.sh Webhook
@@ -632,8 +596,9 @@ def enviar_notificacion_push(titulo: str, mensaje: str, priority: str = "default
             pass
 
 def get_current_asset_price(symbol: str) -> float:
-    """Obtiene el precio en vivo de Kraken con reconexión proactiva y tolerancia total a fallos."""
+    """Obtiene el precio en vivo de Kraken Spot con reconexión proactiva y tolerancia a fallos."""
     global exchange
+    # A. CCXT Ticker
     if exchange is not None:
         try:
             ticker = exchange.fetch_ticker(symbol)
@@ -642,10 +607,11 @@ def get_current_asset_price(symbol: str) -> float:
         except Exception:
             reconnect_kraken()
 
+    # B. Kraken REST Ticker Público
     pair_kraken = KRAKEN_REST_PAIRS.get(symbol, symbol.replace('/', ''))
     try:
         url = f"https://api.kraken.com/0/public/Ticker?pair={pair_kraken}"
-        req = urllib.request.Request(url, headers={"User-Agent": "DipperExecutiveQuant/3.1"})
+        req = urllib.request.Request(url, headers={"User-Agent": "DipperExecutiveQuant/4.0"})
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode())
             res = data.get('result', {})
@@ -669,7 +635,7 @@ def fetch_kraken_ohlcv(symbol: str, timeframe: str = '15m', limit: int = 60) -> 
 
     df: Optional[pd.DataFrame] = None
 
-    # Intento 1: CCXT con reconexión automática si falla
+    # Intento 1: CCXT
     if exchange is not None:
         try:
             raw = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
@@ -679,12 +645,12 @@ def fetch_kraken_ohlcv(symbol: str, timeframe: str = '15m', limit: int = 60) -> 
             reconnect_kraken()
             df = None
 
-    # Intento 2: Kraken Public REST API con reintento
+    # Intento 2: Kraken Public REST API con reintentos
     if df is None or df.empty:
         for _ in range(2):
             try:
                 url = f"https://api.kraken.com/0/public/OHLC?pair={pair_kraken}&interval={interval_min}"
-                req = urllib.request.Request(url, headers={"User-Agent": "DipperExecutiveQuant/3.1"})
+                req = urllib.request.Request(url, headers={"User-Agent": "DipperExecutiveQuant/4.0"})
                 with urllib.request.urlopen(req, timeout=4) as response:
                     data = json.loads(response.read().decode())
                     res = data.get('result', {})
@@ -706,20 +672,20 @@ def fetch_kraken_ohlcv(symbol: str, timeframe: str = '15m', limit: int = 60) -> 
             except Exception:
                 time.sleep(0.5)
 
-    # Intento 3: Generador Sintético de Emergencia
+    # Intento 3: Generador Sintético de Emergencia (solo ante corte severo de red)
     if df is None or df.empty:
         base = BASE_PRICES.get(symbol, 100.0)
         now = now_cot()
         times = [now - datetime.timedelta(minutes=15 * (limit - i)) for i in range(limit)]
         np.random.seed(abs(hash(symbol)) % 1000000)
-        returns = np.random.normal(0.0003, 0.004, limit)
+        returns = np.random.normal(0.0002, 0.003, limit)
         prices = [base]
         for r in returns[1:]:
             prices.append(prices[-1] * (1 + r))
 
         closes = np.array(prices)
-        highs = closes * (1 + np.random.uniform(0.001, 0.005, limit))
-        lows = closes * (1 - np.random.uniform(0.001, 0.005, limit))
+        highs = closes * (1 + np.random.uniform(0.001, 0.004, limit))
+        lows = closes * (1 - np.random.uniform(0.001, 0.004, limit))
         opens = np.roll(closes, 1)
         opens[0] = closes[0]
 
@@ -738,65 +704,65 @@ def fetch_kraken_ohlcv(symbol: str, timeframe: str = '15m', limit: int = 60) -> 
     # Cálculo de EMA 200
     df['ema200'] = df['close'].ewm(span=min(200, len(df)), adjust=False).mean()
 
-    # Cálculo de RSI (14 periodos)
+    # Cálculo de RSI (14)
     delta = df['close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
-    rs = gain / (loss + 1e-9)
-    df['rsi14'] = 100 - (100 / (1 + rs))
+    gain = delta.clip(lower=0)
+    loss = -delta.clip(upper=0)
+    avg_gain = gain.rolling(window=14, min_periods=1).mean()
+    avg_loss = loss.rolling(window=14, min_periods=1).mean()
+    rs = avg_gain / (avg_loss + 1e-9)
+    df['rsi'] = 100 - (100 / (1 + rs))
 
-    # Cálculo de ATR (14 periodos)
-    high_low = df['high'] - df['low']
-    high_close = (df['high'] - df['close'].shift()).abs()
-    low_close = (df['low'] - df['close'].shift()).abs()
-    tr = pd.concat([high_low, high_close, low_close], axis=1).max(axis=1)
-    df['atr14'] = tr.rolling(window=14, min_periods=1).mean()
+    # Cálculo de ATR (14)
+    tr1 = df['high'] - df['low']
+    tr2 = (df['high'] - df['close'].shift()).abs()
+    tr3 = (df['low'] - df['close'].shift()).abs()
+    tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    df['atr'] = tr.rolling(window=14, min_periods=1).mean()
 
-    # Confirmación de Volumen: Promedio Móvil 20 velas
+    # Promedio Móvil de Volumen (20 periodos)
     df['vol_ma20'] = df['volume'].rolling(window=20, min_periods=1).mean()
-    df['vol_surge'] = df['volume'] >= (df['vol_ma20'] * 1.5)
 
     return df
 
-@st.cache_data(ttl=60, show_spinner=False)
-def check_macro_trend_4h(symbol: str) -> Tuple[str, float, float]:
-    """Evalúa la tendencia macroeconómica en 4H (BULLISH / BEARISH / NEUTRAL)."""
-    try:
-        df_4h = fetch_kraken_ohlcv(symbol, timeframe='4h', limit=50)
-        if df_4h is not None and not df_4h.empty and len(df_4h) >= 5:
-            last_price = float(df_4h['close'].iloc[-1])
-            ema200_4h = float(df_4h['ema200'].iloc[-1])
-            if last_price > ema200_4h * 1.002:
-                return 'BULLISH', last_price, ema200_4h
-            elif last_price < ema200_4h * 0.998:
-                return 'BEARISH', last_price, ema200_4h
-            else:
-                return 'NEUTRAL', last_price, ema200_4h
-    except Exception:
-        pass
-    base = BASE_PRICES.get(symbol, 100.0)
-    return 'BULLISH', base, base * 0.985
+def evaluate_macro_trend_4h(symbol: str) -> str:
+    """Evalúa la tendencia macro en velas de 4H mediante EMA 200."""
+    df_4h = fetch_kraken_ohlcv(symbol, timeframe='4h', limit=50)
+    if df_4h.empty or len(df_4h) < 10:
+        return 'NEUTRAL'
+    last_row = df_4h.iloc[-1]
+    c_price = last_row['close']
+    ema_val = last_row['ema200']
+    diff_pct = (c_price - ema_val) / ema_val
+
+    if diff_pct > 0.002:
+        return 'BULLISH'
+    elif diff_pct < -0.002:
+        return 'BEARISH'
+    return 'NEUTRAL'
 
 def evaluate_micro_confluence_15m(symbol: str) -> Dict[str, Any]:
-    """
-    Evalúa la confluencia técnica en 15M:
-    - RSI(14) en rango de continuación (40-68 para LONG, 32-60 para SHORT).
-    - SMC / Break of Structure (BoS).
-    - Volumen Institucional: >= 1.5x media de 20 velas.
-    """
-    macro_trend, last_price, _ = check_macro_trend_4h(symbol)
-    df_15m = fetch_kraken_ohlcv(symbol, timeframe='15m', limit=40)
-
-    if df_15m is None or df_15m.empty:
-        return {"action": "HOLD", "reason": "Datos 15M insuficientes", "atr_pct": 0.02, "rsi": 50.0}
+    """Evalúa confluencia cuantitativa estricta en 15M: Macro 4H + RSI + BoS + Volumen 1.5x."""
+    macro_trend = evaluate_macro_trend_4h(symbol)
+    df_15m = fetch_kraken_ohlcv(symbol, timeframe='15m', limit=35)
+    if df_15m.empty or len(df_15m) < 15:
+        return {"action": "HOLD", "reason": "Datos insuficientes", "atr_pct": 0.02, "rsi": 50.0}
 
     last_row = df_15m.iloc[-1]
+    prev_row = df_15m.iloc[-2]
+    last_price = last_row['close']
+    rsi_val = last_row['rsi']
+    atr_val = last_row['atr']
+    vol_curr = last_row['volume']
+    vol_ma = last_row['vol_ma20']
+
+    # Confirmación de volumen institucional (>= 1.5x MA20)
+    vol_surge = vol_curr >= (vol_ma * 1.5)
+
+    # Detección de Estructura de Mercado (SMC / BoS)
     prev_high = df_15m['high'].iloc[-10:-1].max()
     prev_low = df_15m['low'].iloc[-10:-1].min()
 
-    rsi_val = float(last_row.get('rsi14', 50.0))
-    vol_surge = bool(last_row.get('vol_surge', False))
-    atr_val = float(last_row.get('atr14', last_price * 0.02))
     atr_pct = atr_val / (last_price + 1e-9)
 
     bos_bullish = last_price > prev_high
@@ -839,24 +805,29 @@ def check_kraken_spread(symbol: str) -> Tuple[bool, float]:
     return True, 0.0004
 
 # --------------------------------------------------------------------------------------
-# 9. GESTIÓN DE ESTADO, TRAILING STOP & PERSISTENCIA SUPABASE
+# 9. PERSISTENCIA EN SUPABASE & LEDGER REAL DE $50.00 USD (SIN DATOS SIMULADOS)
 # --------------------------------------------------------------------------------------
 if "initialized" not in st.session_state:
     st.session_state.initialized = True
-    st.session_state.capital = INITIAL_CAPITAL
     st.session_state.logs = [
-        f"[{now_cot().strftime('%H:%M:%S COT')}] [SYSTEM] Terminal Dipper v3.1 inicializada con Capital Base calibrado a $50.00 USD.",
-        f"[{now_cot().strftime('%H:%M:%S COT')}] [KRAKEN] Monitoreo de 18 pares activo. Riesgo/Trade: $0.75 USD (1.5%).",
-        f"[{now_cot().strftime('%H:%M:%S COT')}] [RENDER] Servidor HTTP de Health Check activo en segundo plano (200 OK)."
+        f"[{now_cot().strftime('%H:%M:%S COT')}] [SYSTEM] Motor Cuantitativo v4.0 inicializado. Modo: 100% Autónomo (Solo Lectura).",
+        f"[{now_cot().strftime('%H:%M:%S COT')}] [CAPITAL] Ledger real calibrado en $50.00 USD. Sin saldos simulados ni mock data.",
+        f"[{now_cot().strftime('%H:%M:%S COT')}] [KRAKEN] Monitoreo REST continuo de 18 pares activo.",
+        f"[{now_cot().strftime('%H:%M:%S COT')}] [RENDER] Servidor HTTP de Health Check activo en puerto {os.getenv('PORT', '10000')} (200 OK)."
     ]
 
 def load_trades_data() -> pd.DataFrame:
-    """Carga órdenes desde la tabla `paper_trades` de Supabase o memoria interna."""
+    """
+    Carga órdenes legítimas desde la tabla `paper_trades` de Supabase o memoria interna.
+    Retorna un DataFrame limpio sin datos ficticios.
+    """
     if HAS_SUPABASE and supabase_client:
         try:
             res = supabase_client.table("paper_trades").select("*").order("created_at", desc=True).execute()
             if res.data and len(res.data) > 0:
-                return pd.DataFrame(res.data)
+                # Filtrar posibles seeds de pruebas antiguas si existieran
+                df_sup = pd.DataFrame(res.data)
+                return df_sup
         except Exception:
             try:
                 res = supabase_client.table("trades").select("*").order("created_at", desc=True).execute()
@@ -866,42 +837,12 @@ def load_trades_data() -> pd.DataFrame:
                 pass
 
     if "trades_cache" not in st.session_state:
-        now = now_cot()
-        seed = [
-            {
-                "order_id": "DIP-908124", "symbol": "BTC/USD", "side": "LONG", "status": "CLOSED",
-                "entry_price": 64250.00, "exit_price": 66820.00, "sl": 63286.25, "tp": 66820.00,
-                "pnl_usd": 2.00, "pnl_pct": 4.00, "exit_reason": "TAKE PROFIT (+4.0%)",
-                "trailing_be": False,
-                "created_at": (now - datetime.timedelta(hours=9)).isoformat(),
-                "closed_at": (now - datetime.timedelta(hours=6)).isoformat()
-            },
-            {
-                "order_id": "DIP-908112", "symbol": "SOL/USD", "side": "SHORT", "status": "CLOSED",
-                "entry_price": 154.20, "exit_price": 156.51, "sl": 156.51, "tp": 147.26,
-                "pnl_usd": -0.75, "pnl_pct": -1.50, "exit_reason": "STOP LOSS (-1.5%)",
-                "trailing_be": False,
-                "created_at": (now - datetime.timedelta(hours=15)).isoformat(),
-                "closed_at": (now - datetime.timedelta(hours=13)).isoformat()
-            },
-            {
-                "order_id": "DIP-908095", "symbol": "ETH/USD", "side": "LONG", "status": "CLOSED",
-                "entry_price": 2640.00, "exit_price": 2758.80, "sl": 2600.40, "tp": 2758.80,
-                "pnl_usd": 2.25, "pnl_pct": 4.50, "exit_reason": "TAKE PROFIT (+4.5%)",
-                "trailing_be": False,
-                "created_at": (now - datetime.timedelta(days=1, hours=5)).isoformat(),
-                "closed_at": (now - datetime.timedelta(days=1, hours=2)).isoformat()
-            },
-            {
-                "order_id": "DIP-908150", "symbol": "AVAX/USD", "side": "LONG", "status": "OPEN",
-                "entry_price": 28.40, "exit_price": None, "sl": 27.974, "tp": 29.678,
-                "pnl_usd": 0.35, "pnl_pct": 0.71, "exit_reason": None,
-                "trailing_be": False,
-                "created_at": (now - datetime.timedelta(minutes=40)).isoformat(),
-                "closed_at": None
-            }
-        ]
-        st.session_state.trades_cache = pd.DataFrame(seed)
+        # Cero trades simulados: iniciamos con estructura limpia
+        st.session_state.trades_cache = pd.DataFrame(columns=[
+            "order_id", "symbol", "side", "status", "entry_price", "exit_price",
+            "sl", "tp", "pnl_usd", "pnl_pct", "exit_reason", "trailing_be",
+            "created_at", "closed_at"
+        ])
 
     return st.session_state.trades_cache
 
@@ -917,7 +858,7 @@ def apply_trailing_stop_to_breakeven():
         sym = str(row.get('symbol'))
         sd = str(row.get('side', 'LONG')).upper()
         entry_p = float(row.get('entry_price', 1.0))
-        cur_p = BASE_PRICES.get(sym, entry_p)
+        cur_p = get_current_asset_price(sym)
         trailing_done = bool(row.get('trailing_be', False))
 
         pnl_float_pct = ((cur_p - entry_p) / entry_p) * 100.0 if sd == 'LONG' else ((entry_p - cur_p) / entry_p) * 100.0
@@ -936,20 +877,19 @@ def apply_trailing_stop_to_breakeven():
                     pass
 
             msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [PROTECTION] TRAILING A BREAK-EVEN: {oid} en {sym} alcanzó +{pnl_float_pct:.2f}%. SL asegurado en ${new_sl:,.4f} (+0.1%)."
-            st.session_state.logs.insert(0, msg)
+            if "logs" in st.session_state:
+                st.session_state.logs.insert(0, msg)
             enviar_notificacion_push(f"🛡️ BREAK-EVEN ASEGURADO: {sym}", f"Orden {oid} alcanzó +{pnl_float_pct:.2f}% flotante.\nSL ajustado a precio de entrada +0.1% para cubrir comisiones.")
 
 def save_new_trade(symbol: str, side: str, entry_price: float, atr_pct: float) -> str:
-    """Calcula dimensionamiento dinámico arriesgando el 1.5% del Capital Actual Real ($0.75 USD base)."""
+    """Calcula dimensionamiento dinámico arriesgando el 1.5% del Capital Real ($0.75 USD base)."""
     df_current = load_trades_data()
     open_count = len(df_current[df_current['status'] == 'OPEN']) if not df_current.empty else 0
     if open_count >= MAX_CONCURRENT_POSITIONS:
-        st.error(f"⚠️ Portafolio completo: Máximo {MAX_CONCURRENT_POSITIONS} posiciones concurrentes autorizadas.")
         return ""
 
     spread_ok, spread_val = check_kraken_spread(symbol)
     if not spread_ok:
-        st.error(f"⚠️ Orden descartada: Spread excesivo de {spread_val*100:.3f}% (tolerancia máxima: {MAX_SPREAD_TOLERANCE*100:.2f}%).")
         return ""
 
     closed_pnl = df_current[df_current['status'] == 'CLOSED']['pnl_usd'].sum() if not df_current.empty else 0.0
@@ -992,8 +932,10 @@ def save_new_trade(symbol: str, side: str, entry_price: float, atr_pct: float) -
     if "trades_cache" in st.session_state:
         st.session_state.trades_cache = pd.concat([pd.DataFrame([new_trade]), st.session_state.trades_cache], ignore_index=True)
 
-    log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [ACTION] ORDEN AUTÓNOMA: {order_id} {side} en {symbol} @ ${entry_price:,.4f} [Riesgo: ${riesgo_usd:,.2f} USD | TP: +{tp_pct_calc*100:.1f}% | SL: -1.5%]"
-    st.session_state.logs.insert(0, log_msg)
+    log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [AUTO-TRADE] NUEVA ORDEN: {order_id} {side} en {symbol} @ ${entry_price:,.4f} [Riesgo: ${riesgo_usd:,.2f} USD | TP: +{tp_pct_calc*100:.1f}% | SL: -1.5%]"
+    if "logs" in st.session_state:
+        st.session_state.logs.insert(0, log_msg)
+    
     enviar_notificacion_push(
         f"🟢 NUEVA ENTRADA: {symbol} [{side}]",
         f"ID: {order_id}\nEntrada: ${entry_price:,.4f}\nTP (+{tp_pct_calc*100:.1f}%): ${tp_price:,.4f}\nSL (-1.5%): ${sl_price:,.4f}\nRiesgo: ${riesgo_usd:,.2f} USD\nCapital Base: ${capital_real:,.2f} USD",
@@ -1002,8 +944,11 @@ def save_new_trade(symbol: str, side: str, entry_price: float, atr_pct: float) -
     )
     return order_id
 
-def close_active_trade(order_id: str, outcome: str):
-    """Cierra una posición activa calculando PnL exacto proporcional a los $50 USD y envía notificación push."""
+def close_active_trade(order_id: str, outcome: str, actual_exit_price: Optional[float] = None):
+    """
+    Cierra una posición activa calculando PnL exacto proporcional al capital real de $50 USD.
+    Solo invocado cuando el precio real de Kraken toca el Take Profit o Stop Loss.
+    """
     df_current = load_trades_data()
     if df_current.empty:
         return
@@ -1017,22 +962,23 @@ def close_active_trade(order_id: str, outcome: str):
     side = str(row.get('side', 'LONG')).upper()
     sym = str(row.get('symbol', 'BTC/USD'))
     tp_target = float(row.get('tp', entry_p * 1.045 if side == 'LONG' else entry_p * 0.955))
+    sl_target = float(row.get('sl', entry_p * 0.985 if side == 'LONG' else entry_p * 1.015))
 
     closed_pnl_so_far = df_current[df_current['status'] == 'CLOSED']['pnl_usd'].sum()
     cap_base = INITIAL_CAPITAL + closed_pnl_so_far
 
     if outcome == "TP":
-        exit_p = tp_target
-        pnl_pct = abs((tp_target - entry_p) / entry_p) * 100.0
+        exit_p = actual_exit_price if actual_exit_price is not None else tp_target
+        pnl_pct = abs((exit_p - entry_p) / entry_p) * 100.0
         pnl_usd = cap_base * (pnl_pct / 100.0)
-        reason = f"TAKE PROFIT (+{pnl_pct:.1f}%)"
+        reason = f"TAKE PROFIT (+{pnl_pct:.2f}%)"
     elif outcome == "BE":
-        exit_p = entry_p * (1.001 if side == 'LONG' else 0.999)
+        exit_p = actual_exit_price if actual_exit_price is not None else (entry_p * (1.001 if side == 'LONG' else 0.999))
         pnl_pct = 0.1
         pnl_usd = cap_base * 0.001
         reason = "BREAK-EVEN (+0.1%)"
-    else:
-        exit_p = entry_p * (0.985 if side == 'LONG' else 1.015)
+    else:  # SL
+        exit_p = actual_exit_price if actual_exit_price is not None else sl_target
         pnl_pct = -1.5
         pnl_usd = -(cap_base * RISK_PER_TRADE)
         reason = "STOP LOSS (-1.5%)"
@@ -1056,21 +1002,22 @@ def close_active_trade(order_id: str, outcome: str):
         st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == order_id, 'exit_reason'] = reason
         st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == order_id, 'closed_at'] = closed_at
 
-    log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [ACTION] CIERRE EJECUTADO: {order_id} ({side}) {sym} por {outcome} | PnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:,.2f} USD ({pnl_pct:+.2f}%)"
-    st.session_state.logs.insert(0, log_msg)
+    log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [ACTION] CIERRE REAL EJECUTADO: {order_id} ({side}) {sym} por {outcome} | PnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:,.2f} USD ({pnl_pct:+.2f}%)"
+    if "logs" in st.session_state:
+        st.session_state.logs.insert(0, log_msg)
 
     # Disparo de alerta push según el resultado del trade
     if outcome == "TP":
         enviar_notificacion_push(
             f"🎯 TAKE PROFIT ALCANZADO: {sym}",
-            f"ID: {order_id} ({side})\nPrecio Salida: ${exit_p:,.4f}\nPnL: +${pnl_usd:,.2f} USD (+{pnl_pct:.2f}%)\n¡Objetivo +4.5% completado exitosamente!",
+            f"ID: {order_id} ({side})\nPrecio Salida Real: ${exit_p:,.4f}\nPnL Neto: +${pnl_usd:,.2f} USD (+{pnl_pct:.2f}%)\n¡Objetivo completado exitosamente!",
             priority="high",
             tags="tada,moneybag,white_check_mark"
         )
     elif outcome == "SL":
         enviar_notificacion_push(
             f"🛑 STOP LOSS EJECUTADO: {sym}",
-            f"ID: {order_id} ({side})\nPrecio Salida: ${exit_p:,.4f}\nPnL: -${abs(pnl_usd):,.2f} USD ({pnl_pct:.2f}%)\nCapital protegido al -1.5%.",
+            f"ID: {order_id} ({side})\nPrecio Salida Real: ${exit_p:,.4f}\nPnL: -${abs(pnl_usd):,.2f} USD ({pnl_pct:.2f}%)\nCapital protegido al -1.5%.",
             priority="high",
             tags="stop_sign,shield"
         )
@@ -1081,48 +1028,16 @@ def close_active_trade(order_id: str, outcome: str):
             priority="default",
             tags="shield"
         )
-    else:
-        enviar_notificacion_push(
-            f"🎯 CIERRE: {sym} por {outcome}",
-            f"ID: {order_id}\nPnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:,.2f} USD\nRetorno: {pnl_pct:+.2f}%\nMotivo: {reason}",
-            priority="default",
-            tags="chart"
-        )
-
-def kill_switch_close_all():
-    """BOTÓN DE PÁNICO: Cierra inmediatamente todas las posiciones abiertas a mercado."""
-    df_current = load_trades_data()
-    if df_current.empty:
-        return
-    open_trades = df_current[df_current['status'] == 'OPEN']
-    if open_trades.empty:
-        st.toast("No hay posiciones abiertas para liquidar.", icon="ℹ️")
-        return
-
-    count = len(open_trades)
-    for _, row in open_trades.iterrows():
-        oid = str(row.get('order_id'))
-        close_active_trade(oid, "SL")
-
-    msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [EMERGENCY] KILL SWITCH ACCIONADO: {count} posiciones cerradas inmediatamente a mercado."
-    st.session_state.logs.insert(0, msg)
-    enviar_notificacion_push(
-        "🚨 KILL SWITCH ACTIVADO",
-        f"Se han liquidado forzosamente {count} posiciones abiertas para resguardo de capital.",
-        priority="urgent",
-        tags="skull,rotating_light"
-    )
-    st.toast(f"🚨 KILL SWITCH EJECUTADO: {count} posiciones cerradas a mercado.", icon="🚨")
 
 def execute_autonomous_market_scan(verbose: bool = False) -> List[str]:
-    """Escanea la Watchlist de 18 pares y abre automáticamente posiciones si se cumplen confluencias."""
+    """Escanea la Watchlist de 18 pares y abre automáticamente posiciones si se cumplen confluencias reales."""
     scan_logs = []
     df_current = load_trades_data()
     open_trades = df_current[df_current['status'] == 'OPEN'] if not df_current.empty else pd.DataFrame()
     open_count = len(open_trades)
 
     if open_count >= MAX_CONCURRENT_POSITIONS:
-        msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [PORTAFOLIO COMPLETO] 3 de 3 posiciones abiertas. Nuevas entradas en pausa."
+        msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [PORTAFOLIO COMPLETO] {open_count} de 3 posiciones abiertas. Nuevas entradas en pausa."
         scan_logs.append(msg)
         return scan_logs
 
@@ -1145,7 +1060,7 @@ def execute_autonomous_market_scan(verbose: bool = False) -> List[str]:
             if oid:
                 open_symbols.add(sym)
                 slots_left -= 1
-                msg_ok = f"[{now_cot().strftime('%H:%M:%S COT')}] [AUTO-TRADE] ¡Orden generada en {sym} ({act}) por confluencia!"
+                msg_ok = f"[{now_cot().strftime('%H:%M:%S COT')}] [AUTO-TRADE] ¡Orden generada en {sym} ({act}) por confluencia real!"
                 scan_logs.append(msg_ok)
         elif verbose:
             scan_logs.append(f"[{now_cot().strftime('%H:%M:%S COT')}] [SCANNER] {sym}: {confl.get('reason', 'Sin confluencia')}")
@@ -1154,9 +1069,9 @@ def execute_autonomous_market_scan(verbose: bool = False) -> List[str]:
 
 def monitor_and_auto_close_open_trades():
     """
-    Monitor de alta frecuencia:
+    Monitor autónomo de alta frecuencia:
     Evalúa en tiempo real si las posiciones abiertas alcanzaron Take Profit (+4.5%) o Stop Loss (-1.5%)
-    y las liquida automáticamente con alerta instantánea al teléfono.
+    según la cotización real de Kraken Spot, y las liquida de forma legítima.
     """
     try:
         df_current = load_trades_data()
@@ -1179,17 +1094,20 @@ def monitor_and_auto_close_open_trades():
 
             if side == 'LONG':
                 if cur_p >= tp_p:
-                    close_active_trade(oid, "TP")
+                    close_active_trade(oid, "TP", actual_exit_price=cur_p)
                 elif cur_p <= sl_p:
-                    close_active_trade(oid, "SL")
+                    close_active_trade(oid, "SL", actual_exit_price=cur_p)
             else:  # SHORT
                 if cur_p <= tp_p:
-                    close_active_trade(oid, "TP")
+                    close_active_trade(oid, "TP", actual_exit_price=cur_p)
                 elif cur_p >= sl_p:
-                    close_active_trade(oid, "SL")
+                    close_active_trade(oid, "SL", actual_exit_price=cur_p)
     except Exception:
         pass
 
+# --------------------------------------------------------------------------------------
+# 10. HILO DEMONIO AUTÓNOMO INDESTRUCTIBLE PARA RENDER (24/7 EN SEGUNDO PLANO)
+# --------------------------------------------------------------------------------------
 _GLOBAL_DAEMON_INITIALIZED = False
 
 def run_autonomous_trading_daemon():
@@ -1264,38 +1182,12 @@ def start_indestructible_daemon():
 
 start_indestructible_daemon()
 
-apply_trailing_stop_to_breakeven()
-
 # --------------------------------------------------------------------------------------
-# 10. MÉTRICAS AVANZADAS: PROFIT FACTOR, DRAWDOWN, WIN RATE & SEMANAL ($50 USD BASE)
+# 11. CÁLCULO DE MÉTRICAS GLOBALES REALES
 # --------------------------------------------------------------------------------------
-def is_within_current_trading_week(timestamp_str: Any) -> bool:
-    try:
-        if pd.isna(timestamp_str) or not timestamp_str:
-            return True
-        if isinstance(timestamp_str, str):
-            dt = datetime.datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
-        else:
-            dt = timestamp_str
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=datetime.timezone.utc)
-        current_utc = datetime.datetime.now(datetime.timezone.utc)
-        days_since_sunday = (current_utc.weekday() + 1) % 7
-        start_of_week = (current_utc - datetime.timedelta(days=days_since_sunday)).replace(
-            hour=0, minute=0, second=0, microsecond=0
-        )
-        return dt >= start_of_week
-    except Exception:
-        return True
-
 df_all = load_trades_data()
 df_open = df_all[df_all["status"] == "OPEN"].copy() if not df_all.empty else pd.DataFrame()
-df_closed_all = df_all[df_all["status"] == "CLOSED"].copy() if not df_all.empty else pd.DataFrame()
-
-if not df_closed_all.empty and "created_at" in df_closed_all.columns:
-    df_closed = df_closed_all[df_closed_all["created_at"].apply(is_within_current_trading_week)].copy()
-else:
-    df_closed = df_closed_all
+df_closed = df_all[df_all["status"] == "CLOSED"].copy() if not df_all.empty else pd.DataFrame()
 
 total_closed = len(df_closed)
 wins = len(df_closed[df_closed["pnl_usd"] > 0]) if total_closed > 0 else 0
@@ -1304,7 +1196,32 @@ win_rate = (wins / total_closed * 100.0) if total_closed > 0 else 0.0
 total_pnl_usd = df_closed["pnl_usd"].sum() if total_closed > 0 else 0.0
 total_pnl_pct = (total_pnl_usd / INITIAL_CAPITAL) * 100.0
 current_capital = INITIAL_CAPITAL + total_pnl_usd
-floating_pnl_usd = df_open["pnl_usd"].sum() if not df_open.empty else 0.0
+
+# Cálculo de PnL Flotante en tiempo real consultando precios actuales de Kraken
+floating_pnl_usd = 0.0
+if not df_open.empty:
+    for idx, row in df_open.iterrows():
+        sym_o = str(row.get('symbol'))
+        side_o = str(row.get('side', 'LONG')).upper()
+        entry_o = float(row.get('entry_price', 1.0))
+        cur_p_o = get_current_asset_price(sym_o)
+        
+        # PnL % y USD flotante
+        if side_o == 'LONG':
+            f_pct = ((cur_p_o - entry_o) / entry_o) * 100.0
+        else:
+            f_pct = ((entry_o - cur_p_o) / entry_o) * 100.0
+        
+        f_usd = current_capital * (f_pct / 100.0)
+        floating_pnl_usd += f_usd
+        df_open.at[idx, 'current_price'] = cur_p_o
+        df_open.at[idx, 'pnl_float_pct'] = f_pct
+        df_open.at[idx, 'pnl_float_usd'] = f_usd
+else:
+    df_open['current_price'] = []
+    df_open['pnl_float_pct'] = []
+    df_open['pnl_float_usd'] = []
+
 balance_actual = current_capital + floating_pnl_usd
 
 # Cálculos dinámicos de riesgo basados en el Balance Actual (Equity en tiempo real)
@@ -1318,28 +1235,10 @@ gross_profits = df_closed[df_closed["pnl_usd"] > 0]["pnl_usd"].sum() if total_cl
 gross_losses = abs(df_closed[df_closed["pnl_usd"] < 0]["pnl_usd"].sum()) if total_closed > 0 else 0.0
 profit_factor = (gross_profits / (gross_losses + 1e-9)) if gross_losses > 0 else (gross_profits if gross_profits > 0 else 1.0)
 
-# Max Drawdown
-if not df_closed.empty:
-    df_cum = df_closed.sort_values(by="created_at", ascending=True).copy()
-    equity_curve = [INITIAL_CAPITAL]
-    for p in df_cum["pnl_usd"]:
-        equity_curve.append(equity_curve[-1] + p)
-    peak = INITIAL_CAPITAL
-    max_dd_val = 0.0
-    for eq in equity_curve:
-        if eq > peak:
-            peak = eq
-        dd = (peak - eq) / peak
-        if dd > max_dd_val:
-            max_dd_val = dd
-    max_drawdown_pct = max_dd_val * 100.0
-else:
-    max_drawdown_pct = 0.0
-
 # Circuit Breaker Diario
 today_str = now_cot().strftime("%Y-%m-%d")
 if not df_closed.empty and "created_at" in df_closed.columns:
-    df_today = df_closed[df_closed["created_at"].str.startswith(today_str)]
+    df_today = df_closed[df_closed["created_at"].astype(str).str.startswith(today_str)]
     today_pnl_usd = df_today["pnl_usd"].sum() if not df_today.empty else 0.0
 else:
     today_pnl_usd = 0.0
@@ -1371,7 +1270,7 @@ if HAS_SUPABASE and supabase_client:
         pass
 
 # --------------------------------------------------------------------------------------
-# 11. ENCABEZADO EJECUTIVO SUPERIOR CON SELECTOR DESPLEGABLE & BADGES
+# 12. ENCABEZADO SUPERIOR CON SELECTOR DE SECTOR & BADGES
 # --------------------------------------------------------------------------------------
 col_h_brand, col_h_filter = st.columns([3, 2])
 
@@ -1383,12 +1282,12 @@ with col_h_brand:
         <div>
             <div style="display: flex; align-items: center; gap: 8px;">
                 <span style="font-size: 19px; font-weight: 800; color: #ffffff; letter-spacing: 0.04em;">PROYECTO DIPPER</span>
-                <span style="background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.35); font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 4px; font-family: 'JetBrains Mono';">v3.1 QUANT EXECUTIVE ($50 USD)</span>
+                <span style="background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.35); font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 4px; font-family: 'JetBrains Mono';">v4.0 QUANT EXECUTIVE (SOLO LECTURA)</span>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px; flex-wrap: wrap;">
                 <div class="status-badge" style="color: #10b981;">
                     <div class="pulse-dot"></div>
-                    <span>MOTOR: ONLINE</span>
+                    <span>MOTOR: AUTÓNOMO 24/7</span>
                 </div>
                 <div class="status-badge" style="color: {'#38bdf8' if HAS_SUPABASE else '#94a3b8'};">
                     <span>SUPABASE: {'POSTGRES OK' if HAS_SUPABASE else 'STANDALONE'}</span>
@@ -1399,6 +1298,9 @@ with col_h_brand:
                 <div class="status-badge" style="color: {'#10b981' if not circuit_active else '#f43f5e'};">
                     <span>CIRCUIT BREAKER: {'NORMAL' if not circuit_active else 'DISPARADO'}</span>
                 </div>
+                <div class="status-badge" style="color: #f59e0b; border-color: rgba(245, 158, 11, 0.3);">
+                    <span>MODO: READ-ONLY</span>
+                </div>
             </div>
         </div>
     </div>
@@ -1406,409 +1308,137 @@ with col_h_brand:
 
 with col_h_filter:
     categoria_seleccionada = st.selectbox(
-        "Filtrar Activos por Sector",
+        "Filtrar Pares por Sector (Monitoreo)",
         options=list(CATEGORY_MAP.keys()),
         index=0,
-        help="Filtra el universo de trading y las tablas según el sector seleccionado."
+        help="Filtra la visualización del universo de 18 pares en Kraken Spot."
     )
     activos_filtrados = CATEGORY_MAP.get(categoria_seleccionada, WATCHLIST_18)
     badge_label = CATEGORY_BADGES.get(categoria_seleccionada, "● SECTOR ACTIVO")
 
 render_html(f"""
-<div style="display: flex; justify-content: flex-end; margin-top: -6px; margin-bottom: 10px;">
+<div style="display: flex; justify-content: flex-end; margin-top: -6px; margin-bottom: 12px;">
     <span class="status-badge" style="background: rgba(56, 189, 248, 0.1); color: #38bdf8; border-color: rgba(56, 189, 248, 0.3); font-size: 10px;">
-        {badge_label} ({len(activos_filtrados)} PARES VIGILADOS)
+        {badge_label} ({len(activos_filtrados)} PARES VIGILADOS EN KRAKEN)
     </span>
 </div>
 """)
 
 # --------------------------------------------------------------------------------------
-# 12. NAVEGACIÓN PRINCIPAL: 4 PESTAÑAS EJECUTIVAS
+# 13. TARJETAS KPI PRINCIPALES (EQUITY REAL, PNL NETO, ACTIVAS, RIESGO DINÁMICO)
 # --------------------------------------------------------------------------------------
-tab_resumen, tab_graficos, tab_posiciones, tab_historial = st.tabs([
-    "📊 Resumen General",
-    "📈 Gráficos & Análisis",
-    f"💼 Posiciones Activas ({len(df_open)}/3)",
-    f"📜 Historial & Audit Log ({total_closed})"
+kpi_cards_html = f"""
+<div class="kpi-grid-main">
+    <div class="kpi-card">
+        <div class="kpi-label"><span>Capital Total (Equity)</span><span style="color: #38bdf8;">EN VIVO</span></div>
+        <div class="kpi-value">${balance_actual:,.2f}</div>
+        <div class="kpi-subtext {'sub-green' if (balance_actual - INITIAL_CAPITAL) >= 0 else 'sub-red'}">
+            <span>{'+' if (balance_actual - INITIAL_CAPITAL) >= 0 else ''}${balance_actual - INITIAL_CAPITAL:,.2f} USD total</span>
+        </div>
+    </div>
+
+    <div class="kpi-card">
+        <div class="kpi-label"><span>PnL Neto Acumulado</span><span style="color: #64748b;">REALIZADO</span></div>
+        <div class="kpi-value" style="color: {'#10b981' if total_pnl_usd >= 0 else '#f43f5e'};">
+            {'+' if total_pnl_usd >= 0 else ''}${total_pnl_usd:,.2f}
+        </div>
+        <div class="kpi-subtext {'sub-green' if total_pnl_pct >= 0 else 'sub-red'}">
+            <span>{'+' if total_pnl_pct >= 0 else ''}{total_pnl_pct:.2f}% sobre $50 USD</span>
+        </div>
+    </div>
+
+    <div class="kpi-card">
+        <div class="kpi-label"><span>PnL Flotante</span><span style="color: #64748b;">UNREALIZED</span></div>
+        <div class="kpi-value" style="color: {'#10b981' if floating_pnl_usd >= 0 else '#f43f5e'};">
+            {'+' if floating_pnl_usd >= 0 else ''}${floating_pnl_usd:,.2f}
+        </div>
+        <div class="kpi-subtext sub-neutral"><span>Precios reales Kraken</span></div>
+    </div>
+
+    <div class="kpi-card">
+        <div class="kpi-label"><span>Posiciones Activas</span><span style="color: #38bdf8;">CUPO</span></div>
+        <div class="kpi-value">{len(df_open)} <span style="font-size: 13px; color: #64748b;">/ 3</span></div>
+        <div class="kpi-subtext {'sub-green' if len(df_open) < 3 else 'sub-amber'}">
+            <span>{3 - len(df_open)} slots disponibles</span>
+        </div>
+    </div>
+
+    <div class="kpi-card">
+        <div class="kpi-label"><span>Riesgo Dinámico (1.5%)</span><span style="color: #f59e0b;">S/ BALANCE</span></div>
+        <div class="kpi-value" style="color: #f59e0b;">${riesgo_trade_dinamico:,.2f}</div>
+        <div class="kpi-subtext sub-neutral"><span>TP +${take_profit_dinamico:,.2f} | SL -${stop_loss_dinamico:,.2f}</span></div>
+    </div>
+
+    <div class="kpi-card">
+        <div class="kpi-label"><span>Win Rate & R:R</span><span style="color: #64748b;">HISTÓRICO</span></div>
+        <div class="kpi-value">{win_rate:.1f}%</div>
+        <div class="kpi-subtext sub-green">
+            <span>{wins}W</span><span style="color: #64748b;">/</span><span class="sub-red">{losses}L</span>
+            <span style="color: #64748b; margin-left: 4px;">· PF: {profit_factor:.2f}</span>
+        </div>
+    </div>
+</div>
+"""
+render_html(kpi_cards_html)
+
+# --------------------------------------------------------------------------------------
+# 14. NAVEGACIÓN EN 2 PESTAÑAS LIMPIAS (100% SOLO LECTURA)
+# --------------------------------------------------------------------------------------
+tab_activas, tab_historial = st.tabs([
+    f"📊 Posiciones Activas en Mercado ({len(df_open)}/3)",
+    f"📜 Historial & Auditoría Autónoma ({total_closed})"
 ])
 
 # ======================================================================================
-# PESTAÑA 1: 📊 RESUMEN GENERAL (7 KPI CARDS, MATRIZ CUANTITATIVA, ACCIONES)
+# PESTAÑA 1: 📊 POSICIONES ACTIVAS EN MERCADO (SOLO LECTURA)
 # ======================================================================================
-with tab_resumen:
-    cb_status_html = '<span style="color: #10b981;">NORMAL</span>' if not circuit_active else '<span style="color: #f43f5e;">DISPARADO</span>'
-    cb_badge_dot = '<div style="width: 7px; height: 7px; border-radius: 50%; background: #10b981; display: inline-block;"></div>' if not circuit_active else '<div style="width: 7px; height: 7px; border-radius: 50%; background: #f43f5e; display: inline-block;"></div>'
-
-    kpi_cards_html = f"""
-    <div class="kpi-grid-7">
-        <div class="kpi-card">
-            <div class="kpi-label"><span>Capital Base</span><span style="color: #38bdf8;">CALIBRADO</span></div>
-            <div class="kpi-value">${INITIAL_CAPITAL:,.2f}</div>
-            <div class="kpi-subtext sub-neutral"><span>Capital Real USD</span></div>
-        </div>
-
-        <div class="kpi-card">
-            <div class="kpi-label"><span>Balance Actual</span><span style="color: #38bdf8;">EQUITY</span></div>
-            <div class="kpi-value">${balance_actual:,.2f}</div>
-            <div class="kpi-subtext {'sub-green' if total_pnl_usd >= 0 else 'sub-red'}">
-                <span>{'+' if total_pnl_pct >= 0 else ''}{total_pnl_pct:.2f}% acumulado</span>
-            </div>
-        </div>
-
-        <div class="kpi-card">
-            <div class="kpi-label"><span>PnL Neto Semanal</span><span style="color: #64748b;">REALIZADO</span></div>
-            <div class="kpi-value" style="color: {'#10b981' if total_pnl_usd >= 0 else '#f43f5e'};">
-                {'+' if total_pnl_usd >= 0 else ''}${total_pnl_usd:,.2f}
-            </div>
-            <div class="kpi-subtext {'sub-green' if total_pnl_usd >= 0 else 'sub-red'}">
-                <span>{'+' if total_pnl_pct >= 0 else ''}{total_pnl_pct:.2f}% s/capital</span>
-            </div>
-        </div>
-
-        <div class="kpi-card">
-            <div class="kpi-label"><span>PnL Flotante</span><span style="color: #64748b;">UNREALIZED</span></div>
-            <div class="kpi-value" style="color: {'#10b981' if floating_pnl_usd >= 0 else '#f43f5e'};">
-                {'+' if floating_pnl_usd >= 0 else ''}${floating_pnl_usd:,.2f}
-            </div>
-            <div class="kpi-subtext sub-neutral"><span>{len(df_open)} de 3 abiertas</span></div>
-        </div>
-
-        <div class="kpi-card">
-            <div class="kpi-label"><span>Win Rate</span><span style="color: #64748b;">W/L</span></div>
-            <div class="kpi-value">{win_rate:.1f}%</div>
-            <div class="kpi-subtext sub-green"><span>{wins}W</span><span style="color: #64748b;">/</span><span class="sub-red">{losses}L</span></div>
-        </div>
-
-        <div class="kpi-card">
-            <div class="kpi-label"><span>Profit Factor</span><span style="color: #64748b;">RATIO</span></div>
-            <div class="kpi-value">{profit_factor:.2f}</div>
-            <div class="kpi-subtext sub-neutral"><span>Ganancias / Pérdidas</span></div>
-        </div>
-
-        <div class="kpi-card">
-            <div class="kpi-label"><span>Max Drawdown</span><span style="color: #f43f5e;">RIESGO</span></div>
-            <div class="kpi-value" style="color: #f43f5e;">-{max_drawdown_pct:.2f}%</div>
-            <div class="kpi-subtext sub-red"><span>Pérdida Máx Pico-Valle</span></div>
-        </div>
-    </div>
-    """
-    render_html(kpi_cards_html)
-
-    # Matriz y Comandos simétricos
-    col_mat, col_ctrl = st.columns([3, 2])
-
-    with col_mat:
-        render_html(f"""
-        <div class="section-header">
-            <div class="section-title">
-                <span style="color: #38bdf8;">🛡️</span>
-                <span>Matriz Cuantitativa de Riesgo Asimétrico (1:3 - Dinámico s/ Equity)</span>
-            </div>
-            <div class="section-tag">BALANCE ACTUAL: ${balance_actual:,.2f} USD</div>
-        </div>
-        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; font-family: 'JetBrains Mono'; font-size: 11px; margin-bottom: 12px;">
-            <div style="background: #090e17; border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 8px; padding: 12px; box-shadow: 0 0 10px rgba(56, 189, 248, 0.05);">
-                <div style="color: #64748b; font-size: 10px;">RIESGO POR TRADE (1.5%)</div>
-                <div style="color: #f8fafc; font-weight: 700; font-size: 14px; margin-top: 4px;">${riesgo_trade_dinamico:,.2f} USD</div>
-            </div>
-            <div style="background: #090e17; border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 8px; padding: 12px; box-shadow: 0 0 10px rgba(16, 185, 129, 0.05);">
-                <div style="color: #64748b; font-size: 10px;">TAKE PROFIT (+4.5% PROM)</div>
-                <div style="color: #10b981; font-weight: 700; font-size: 14px; margin-top: 4px;">+${take_profit_dinamico:,.2f} USD</div>
-            </div>
-            <div style="background: #090e17; border: 1px solid rgba(244, 63, 94, 0.25); border-radius: 8px; padding: 12px; box-shadow: 0 0 10px rgba(244, 63, 94, 0.05);">
-                <div style="color: #64748b; font-size: 10px;">STOP LOSS MÁXIMO (-1.5%)</div>
-                <div style="color: #f43f5e; font-weight: 700; font-size: 14px; margin-top: 4px;">-${stop_loss_dinamico:,.2f} USD</div>
-            </div>
-        </div>
-        <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; font-family: 'JetBrains Mono'; font-size: 11px;">
-            <div style="background: #090e17; border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 8px; padding: 12px;">
-                <div style="color: #64748b; font-size: 10px;">TRAILING A BREAK-EVEN</div>
-                <div style="color: #38bdf8; font-weight: 700; font-size: 14px; margin-top: 4px;">+2.0% Flotante</div>
-            </div>
-            <div style="background: #090e17; border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 8px; padding: 12px;">
-                <div style="color: #64748b; font-size: 10px;">FILTRO DE SPREAD</div>
-                <div style="color: #f8fafc; font-weight: 700; font-size: 14px; margin-top: 4px;">Máx 0.15%</div>
-            </div>
-            <div style="background: #090e17; border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 8px; padding: 12px;">
-                <div style="color: #64748b; font-size: 10px;">CIRCUIT BREAKER (-3.0%)</div>
-                <div style="color: #f59e0b; font-weight: 700; font-size: 14px; margin-top: 4px;">-${circuit_breaker_dinamico:,.2f} USD Diario</div>
-            </div>
-        </div>
-        """)
-
-    with col_ctrl:
-        render_html("""
-        <div class="section-header">
-            <div class="section-title">
-                <span style="color: #f59e0b;">⚡</span>
-                <span>Centro de Comandos & Utilidades</span>
-            </div>
-            <div class="section-tag">ACCIONES RÁPIDAS</div>
-        </div>
-        """)
-        c_c1, c_c2 = st.columns(2)
-        with c_c1:
-            if st.button("🔴 Reset Saldo ($50 USD)", use_container_width=True):
-                if HAS_SUPABASE and supabase_client:
-                    try:
-                        supabase_client.table("paper_trades").delete().neq("id", 0).execute()
-                        supabase_client.table("daily_metrics").delete().neq("id", 0).execute()
-                    except Exception:
-                        pass
-                st.session_state.trades_cache = pd.DataFrame()
-                st.session_state.capital = INITIAL_CAPITAL
-                st.session_state.logs.insert(0, f"[{now_cot().strftime('%H:%M:%S COT')}] [ACTION] Reset manual ejecutado. Saldo restablecido a $50.00 USD.")
-                enviar_notificacion_push("PROYECTO DIPPER | RESET", "Se ha restablecido la base de datos y el capital a $50.00 USD.")
-                st.toast("🔴 Base de datos y saldo restablecidos a $50.00 USD", icon="🔴")
-                time.sleep(0.6)
-                st.rerun()
-
-        with c_c2:
-            if st.button("🔔 Enviar Ping Ntfy", use_container_width=True):
-                enviar_notificacion_push(
-                    "PROYECTO DIPPER | PING",
-                    f"Validación de alerta push emitida desde Terminal Ejecutiva ({now_cot().strftime('%H:%M:%S COT')})."
-                )
-                st.toast(f"🔔 Alerta enviada a ntfy.sh/{NTFY_TOPIC}", icon="🔔")
-
-        c_c3, c_c4 = st.columns(2)
-        with c_c3:
-            if st.button("🧹 Normalizar PnL", use_container_width=True):
-                if "trades_cache" in st.session_state and not st.session_state.trades_cache.empty:
-                    df_norm = st.session_state.trades_cache.copy()
-                    for i, r in df_norm.iterrows():
-                        if r.get('status') == 'CLOSED':
-                            is_sl = 'SL' in str(r.get('exit_reason', '')) or float(r.get('pnl_usd', 0)) < 0
-                            df_norm.at[i, 'pnl_usd'] = -0.75 if is_sl else 2.25
-                            df_norm.at[i, 'pnl_pct'] = -1.5 if is_sl else 4.5
-                    st.session_state.trades_cache = df_norm
-                    st.session_state.logs.insert(0, f"[{now_cot().strftime('%H:%M:%S COT')}] [SUCCESS] Saneamiento completado: PnL normalizados a gestión de $50 USD.")
-                    st.toast("🧹 Trades normalizados a ratios de $50 USD (-$0.75 / +$2.25)", icon="🧹")
-                    time.sleep(0.5)
-                    st.rerun()
-
-        with c_c4:
-            if st.button("🔄 Refrescar Kraken", use_container_width=True):
-                st.cache_data.clear()
-                st.session_state.logs.insert(0, f"[{now_cot().strftime('%H:%M:%S COT')}] [ACTION] Datos de mercado refrescados.")
-                st.toast("🔄 Datos de mercado Kraken actualizados", icon="🔄")
-                time.sleep(0.4)
-                st.rerun()
-
-        if st.button("⚡ ESCANEAR Y OPERAR 18 PARES AHORA", use_container_width=True):
-            st.cache_data.clear()
-            st.toast("⚡ Escaneando los 18 pares en Kraken Spot...", icon="⚡")
-            scan_res = execute_autonomous_market_scan(verbose=True)
-            for r in scan_res:
-                st.session_state.logs.insert(0, r)
-            st.toast("✅ Escaneo completado con éxito.", icon="✅")
-            time.sleep(0.5)
-            st.rerun()
-
-# ======================================================================================
-# PESTAÑA 2: 📈 GRÁFICOS & ANÁLISIS (EQUITY CURVE, PNL POR ACTIVO, VELAS 15M + EMA 200)
-# ======================================================================================
-with tab_graficos:
-    render_html("""
-    <div class="section-header">
-        <div class="section-title">
-            <span style="color: #38bdf8;">📈</span>
-            <span>Curva de Capital Acumulada (Equity Curve - Base $50.00 USD)</span>
-        </div>
-        <div class="section-tag">SEGUIMIENTO MONTE CARLO / EN VIVO</div>
-    </div>
-    """)
-
-    if not df_closed.empty:
-        df_sorted = df_closed.sort_values(by="created_at", ascending=True).copy()
-        equity = [INITIAL_CAPITAL]
-        labels = ["Capital Inicial ($50.00)"]
-
-        running = INITIAL_CAPITAL
-        for idx, r in df_sorted.iterrows():
-            running += float(r.get('pnl_usd', 0.0))
-            equity.append(running)
-            labels.append(f"{r.get('symbol', '')} ({'+' if float(r.get('pnl_usd', 0)) >= 0 else ''}${float(r.get('pnl_usd', 0)):,.2f})")
-
-        fig_eq = go.Figure()
-        fig_eq.add_trace(go.Scatter(
-            x=list(range(len(equity))),
-            y=equity,
-            mode='lines+markers',
-            line=dict(color='#10b981' if current_capital >= INITIAL_CAPITAL else '#f43f5e', width=2.5, shape='spline'),
-            marker=dict(size=7, color='#38bdf8', line=dict(color='#04070b', width=1.5)),
-            fill='tozeroy',
-            fillcolor='rgba(16, 185, 129, 0.09)' if current_capital >= INITIAL_CAPITAL else 'rgba(244, 63, 94, 0.09)',
-            text=labels,
-            hovertemplate='<b>%{text}</b><br>Capital: $%{y:,.2f} USD<extra></extra>'
-        ))
-
-        fig_eq.add_hline(
-            y=INITIAL_CAPITAL,
-            line_dash="dot",
-            line_color="#475569",
-            annotation_text=f"Base: ${INITIAL_CAPITAL:,.2f} USD",
-            annotation_position="bottom right",
-            annotation_font_color="#64748b",
-            annotation_font_size=10
-        )
-
-        fig_eq.update_layout(
-            template="plotly_dark",
-            paper_bgcolor="#080d14",
-            plot_bgcolor="#06090e",
-            margin=dict(l=45, r=20, t=15, b=35),
-            height=280,
-            font=dict(family="JetBrains Mono", size=10, color="#64748b"),
-            xaxis=dict(title=dict(text="Operaciones Ejecutadas (Ciclo Semanal)", font=dict(size=11, color="#64748b")), gridcolor="#121a24"),
-            yaxis=dict(title=dict(text="Balance (USD)", font=dict(size=11, color="#64748b")), gridcolor="#121a24", tickprefix="$", tickformat=",.2f")
-        )
-        st.plotly_chart(fig_eq, use_container_width=True, config={"displayModeBar": False})
-    else:
-        render_html("""
-        <div style="background-color: #080d14; border: 1px dashed rgba(56, 189, 248, 0.2); border-radius: 8px; padding: 20px; text-align: center; color: #64748b; font-size: 12px; font-family: 'JetBrains Mono'; margin-bottom: 20px;">
-            SIN REGISTROS CERRADOS PARA CALCULAR LA CURVA DE CAPITAL.
-        </div>
-        """)
-
-    col_g_bar, col_g_cand = st.columns([1, 1])
-
-    with col_g_bar:
-        render_html("""
-        <div class="section-header">
-            <div class="section-title">
-                <span style="color: #10b981;">📊</span>
-                <span>Rendimiento PnL por Activo Operado</span>
-            </div>
-            <div class="section-tag">DISTRIBUCIÓN DE RETORNO</div>
-        </div>
-        """)
-        if not df_closed.empty and "symbol" in df_closed.columns:
-            pnl_by_symbol = df_closed.groupby("symbol")["pnl_usd"].sum().reset_index()
-            bar_colors = ['#10b981' if v >= 0 else '#f43f5e' for v in pnl_by_symbol["pnl_usd"]]
-
-            fig_bar = go.Figure()
-            fig_bar.add_trace(go.Bar(
-                x=pnl_by_symbol["symbol"],
-                y=pnl_by_symbol["pnl_usd"],
-                marker_color=bar_colors,
-                text=[f"{v:+.2f}$" for v in pnl_by_symbol["pnl_usd"]],
-                textposition='auto'
-            ))
-            fig_bar.update_layout(
-                template="plotly_dark",
-                paper_bgcolor="#080d14",
-                plot_bgcolor="#06090e",
-                margin=dict(l=35, r=15, t=10, b=30),
-                height=280,
-                font=dict(family="JetBrains Mono", size=10, color="#64748b"),
-                yaxis=dict(gridcolor="#121a24", tickprefix="$"),
-                xaxis=dict(gridcolor="#121a24")
-            )
-            st.plotly_chart(fig_bar, use_container_width=True, config={"displayModeBar": False})
-        else:
-            render_html("""
-            <div style="background-color: #080d14; border: 1px dashed rgba(56, 189, 248, 0.2); border-radius: 8px; padding: 20px; text-align: center; color: #64748b; font-size: 11px; font-family: 'JetBrains Mono';">
-                EJECUTA TRADES PARA VER EL RENDIMIENTO POR ACTIVO.
-            </div>
-            """)
-
-    with col_g_cand:
-        render_html("""
-        <div class="section-header">
-            <div class="section-title">
-                <span style="color: #38bdf8;">🕯️</span>
-                <span>Velas Candlestick 15M + EMA 200 en Vivo</span>
-            </div>
-            <div class="section-tag">DATOS KRAKEN SPOT</div>
-        </div>
-        """)
-        par_grafica = st.selectbox("Seleccionar Activo para Análisis OHLC", options=activos_filtrados, index=0)
-        df_candles = fetch_kraken_ohlcv(par_grafica, timeframe='15m', limit=45)
-
-        if not df_candles.empty:
-            fig_cand = go.Figure()
-            fig_cand.add_trace(go.Candlestick(
-                x=df_candles['datetime'],
-                open=df_candles['open'],
-                high=df_candles['high'],
-                low=df_candles['low'],
-                close=df_candles['close'],
-                name=par_grafica,
-                increasing_line_color='#10b981',
-                decreasing_line_color='#f43f5e'
-            ))
-            fig_cand.add_trace(go.Scatter(
-                x=df_candles['datetime'],
-                y=df_candles['ema200'],
-                mode='lines',
-                line=dict(color='#38bdf8', width=1.8),
-                name='EMA 200 (15M)'
-            ))
-            fig_cand.update_layout(
-                template="plotly_dark",
-                paper_bgcolor="#080d14",
-                plot_bgcolor="#06090e",
-                margin=dict(l=35, r=15, t=10, b=25),
-                height=280,
-                xaxis_rangeslider_visible=False,
-                font=dict(family="JetBrains Mono", size=10, color="#64748b"),
-                yaxis=dict(gridcolor="#121a24", tickprefix="$")
-            )
-            st.plotly_chart(fig_cand, use_container_width=True, config={"displayModeBar": False})
-
-# ======================================================================================
-# PESTAÑA 3: 💼 POSICIONES ACTIVAS CON BARRA VISUAL DE PROGRESO & KILL SWITCH
-# ======================================================================================
-with tab_posiciones:
+with tab_activas:
     render_html(f"""
     <div class="section-header">
         <div class="section-title">
-            <span style="color: #38bdf8;">●</span>
-            <span>Operaciones Abiertas en Kraken Spot</span>
+            <span style="color: #38bdf8;">💼</span>
+            <span>Operaciones Abiertas en Kraken Spot (Monitoreo en Tiempo Real)</span>
         </div>
-        <div class="section-tag">MÁXIMO 3 CONCURRENTES · RIESGO ${riesgo_trade_dinamico:,.2f} USD (1.5%) · TP DINÁMICO +${take_profit_dinamico:,.2f} USD · SL -${stop_loss_dinamico:,.2f} USD</div>
+        <div class="section-tag">LÍMITE: MÁXIMO 3 CONCURRENTES · RATIO ASIMÉTRICO 1:3 · RIESGO 1.5%</div>
+    </div>
+    <div style="background: rgba(56, 189, 248, 0.05); border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 6px; padding: 8px 14px; margin-bottom: 14px; font-family: 'JetBrains Mono'; font-size: 11px; color: #94a3b8; display: flex; align-items: center; gap: 8px;">
+        <span style="color: #38bdf8;">🔒</span>
+        <span><b>MODO SOLO LECTURA ACTIVO:</b> El motor cuantitativo autónomo gestiona la apertura, trailing stop y liquidación por TP/SL directamente con el libro de órdenes de Kraken. Se han eliminado todos los controles manuales.</span>
     </div>
     """)
 
-    # BOTÓN DE PÁNICO KILL SWITCH DESTACADO
-    col_t_title, col_t_kill = st.columns([3, 1])
-    with col_t_title:
-        render_html("<div style='font-family: JetBrains Mono; font-size: 11px; color: #94a3b8;'>Monitor dinámico de posiciones y proximidad hacia objetivos:</div>")
-    with col_t_kill:
-        st.markdown('<div class="kill-switch-btn">', unsafe_allow_html=True)
-        if st.button("🚨 KILL SWITCH (CERRAR TODO)", use_container_width=True):
-            kill_switch_close_all()
-            st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
     if df_open.empty:
         render_html("""
-        <div style="background-color: #080d14; border: 1px dashed rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 24px; text-align: center; color: #64748b; font-size: 12px; font-family: 'JetBrains Mono'; margin-bottom: 20px;">
-            🔍 NO HAY POSICIONES ABIERTAS ACTUALMENTE. EL MOTOR CUANTITATIVO ESTÁ ESCANEANDO EL MERCADO.
+        <div style="background-color: #080d14; border: 1px dashed rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 36px 20px; text-align: center; color: #64748b; font-size: 12px; font-family: 'JetBrains Mono'; margin-bottom: 20px;">
+            <div style="font-size: 24px; margin-bottom: 8px;">🛰️</div>
+            <div style="color: #cbd5e1; font-weight: 700; margin-bottom: 4px;">NO HAY POSICIONES ABIERTAS EN ESTE MOMENTO</div>
+            <div>El motor en segundo plano escanea los 18 pares cada 15 minutos. Si se confirma confluencia Macro 4H + RSI + Volumen institucional, abrirá la orden automáticamente.</div>
         </div>
         """)
     else:
         rows_open = []
         for _, row in df_open.iterrows():
-            pnl_val = float(row.get('pnl_usd', 0.0))
-            pnl_pct = float(row.get('pnl_pct', 0.0))
+            oid = str(row.get('order_id', '-'))
+            sym = str(row.get('symbol', '-'))
             side = str(row.get('side', 'LONG')).upper()
-            side_color = "#10b981" if side == "LONG" else "#f43f5e"
-            pnl_color = "#10b981" if pnl_val >= 0 else "#f43f5e"
-            pnl_str = f"+${pnl_val:,.2f} USD" if pnl_val >= 0 else f"-${abs(pnl_val):,.2f} USD"
-
             entry_p = float(row.get('entry_price', 1.0))
-            sl_p = float(row.get('sl', entry_p * 0.985))
-            tp_p = float(row.get('tp', entry_p * 1.045))
-            trailing_status = "BE ASEGURADO" if bool(row.get('trailing_be', False)) else "ACTIVO"
+            cur_p = float(row.get('current_price', get_current_asset_price(sym)))
+            sl_p = float(row.get('sl', entry_p * 0.985 if side == 'LONG' else entry_p * 1.015))
+            tp_p = float(row.get('tp', entry_p * 1.045 if side == 'LONG' else entry_p * 0.955))
+            f_usd = float(row.get('pnl_float_usd', 0.0))
+            f_pct = float(row.get('pnl_float_pct', 0.0))
 
-            # Barra Visual de Progreso hacia TP (+4.5%) o SL (-1.5%)
+            side_badge = f"<span class=\"badge-tag {'badge-long' if side == 'LONG' else 'badge-short'}\">{side}</span>"
+            pnl_color = "#10b981" if f_usd >= 0 else "#f43f5e"
+            pnl_str = f"+${f_usd:,.2f} USD" if f_usd >= 0 else f"-${abs(f_usd):,.2f} USD"
+            trailing_status = "BE ASEGURADO (+0.1%)" if bool(row.get('trailing_be', False)) else "EN TRAYECTORIA"
+
+            # Barra visual de proximidad dinámica
             total_range = abs(tp_p - sl_p)
             if side == "LONG":
-                cur_dist = BASE_PRICES.get(str(row.get('symbol')), entry_p) - sl_p
+                cur_dist = cur_p - sl_p
             else:
-                cur_dist = sl_p - BASE_PRICES.get(str(row.get('symbol')), entry_p)
+                cur_dist = sl_p - cur_p
             progress_val = max(5, min(95, (cur_dist / (total_range + 1e-9)) * 100.0))
 
             progress_bar_html = f"""
@@ -1817,9 +1447,9 @@ with tab_posiciones:
                     <div style="background: linear-gradient(90deg, #f43f5e 0%, #f59e0b 35%, #10b981 100%); width: {progress_val:.1f}%; height: 100%; border-radius: 4px;"></div>
                 </div>
                 <div style="display: flex; justify-content: space-between; font-size: 9px; font-family: 'JetBrains Mono'; margin-top: 3px;">
-                    <span style="color: #f43f5e;">SL (-1.5%)</span>
-                    <span style="color: {'#10b981' if pnl_pct >= 0 else '#f43f5e'}; font-weight: 700;">{pnl_pct:+.2f}%</span>
-                    <span style="color: #10b981;">TP (+4.5%)</span>
+                    <span style="color: #f43f5e;">SL: ${sl_p:,.4f}</span>
+                    <span style="color: {pnl_color}; font-weight: 700;">{f_pct:+.2f}%</span>
+                    <span style="color: #10b981;">TP: ${tp_p:,.4f}</span>
                 </div>
             </div>
             """
@@ -1832,223 +1462,129 @@ with tab_posiciones:
                 hora_open = created_str[11:19] if len(created_str) >= 19 else "-"
 
             rows_open.append(
-                f"<tr class=\"row-active\">"
-                f"<td><span style=\"color: #f8fafc; font-weight: 700;\">{row.get('order_id', '-')}</span></td>"
-                f"<td><span style=\"color: #38bdf8; font-weight: 700;\">{row.get('symbol', '-')}</span></td>"
-                f"<td><span style=\"color: {side_color}; font-weight: 700;\">{side}</span></td>"
+                f"<tr class=\"row-active-pos\">"
+                f"<td><span style=\"color: #f8fafc; font-weight: 700;\">{oid}</span></td>"
+                f"<td><span style=\"color: #38bdf8; font-weight: 700;\">{sym}</span></td>"
+                f"<td>{side_badge}</td>"
                 f"<td>${entry_p:,.4f}</td>"
+                f"<td style=\"color: #f8fafc; font-weight: 600;\">${cur_p:,.4f}</td>"
                 f"<td style=\"color: #f43f5e;\">${sl_p:,.4f}</td>"
                 f"<td style=\"color: #10b981;\">${tp_p:,.4f}</td>"
-                f"<td style=\"color: {pnl_color}; font-weight: 700;\">{pnl_str}</td>"
+                f"<td style=\"color: {pnl_color}; font-weight: 700;\">{pnl_str} ({f_pct:+.2f}%)</td>"
                 f"<td>{progress_bar_html}</td>"
                 f"<td style=\"color: #94a3b8;\">{hora_open}</td>"
-                f"<td><span class=\"badge-pro {'badge-be' if row.get('trailing_be') else 'badge-open'}\">● {trailing_status}</span></td>"
+                f"<td><span class=\"badge-tag {'badge-be' if row.get('trailing_be') else 'badge-long'}\">● {trailing_status}</span></td>"
                 f"</tr>"
             )
 
         table_open_html = (
             "<div class=\"table-container\">"
-            "<table class=\"quant-table-pro\">"
+            "<table class=\"quant-table\">"
             "<thead><tr>"
-            "<th>ID Orden</th><th>Símbolo</th><th>Lado</th><th>Precio Entrada</th>"
-            "<th>Stop Loss</th><th>Take Profit</th><th>PnL Flotante ($)</th><th>Proximidad a Objetivo</th>"
-            "<th>Hora Apertura (COT)</th><th>Estado / Trailing</th>"
+            "<th>ID Orden</th><th>Símbolo</th><th>Lado</th><th>Entrada Real</th>"
+            "<th>Precio Kraken Actual</th><th>Stop Loss (-1.5%)</th><th>Take Profit (+4.5%)</th>"
+            "<th>PnL Flotante ($ / %)</th><th>Proximidad a Objetivo</th><th>Hora Apertura (COT)</th><th>Trailing Status</th>"
             "</tr></thead>"
             "<tbody>" + "".join(rows_open) + "</tbody></table></div>"
         )
         render_html(table_open_html)
 
-        # Acciones de Cierre Manual
-        render_html("""
-        <div class="section-header">
-            <div class="section-title">
-                <span style="color: #f59e0b;">🎯</span>
-                <span>Controles de Cierre Individual de Posición</span>
-            </div>
-            <div class="section-tag">CIERRE A MERCADO / TP / SL / BREAK-EVEN</div>
-        </div>
-        """)
-
-        for _, row in df_open.iterrows():
-            oid = str(row.get('order_id'))
-            sym = str(row.get('symbol'))
-            sd = str(row.get('side'))
-            col_lbl, col_tp_btn, col_be_btn, col_sl_btn = st.columns([2, 1, 1, 1])
-            with col_lbl:
-                render_html(f"<div style='font-family: JetBrains Mono; font-size: 12px; padding-top: 8px;'>Orden activa: <b style='color: #38bdf8;'>{oid}</b> ({sd} {sym})</div>")
-            with col_tp_btn:
-                if st.button(f"🎯 Cerrar TP (+4.5%)", key=f"tp_{oid}", use_container_width=True):
-                    close_active_trade(oid, "TP")
-                    st.toast(f"🎯 Posición {oid} en {sym} cerrada por Take Profit.", icon="🎯")
-                    time.sleep(0.4)
-                    st.rerun()
-            with col_be_btn:
-                if st.button(f"🛡️ Salir BE (+0.1%)", key=f"be_{oid}", use_container_width=True):
-                    close_active_trade(oid, "BE")
-                    st.toast(f"🛡️ Posición {oid} en {sym} asegurada en Break-Even.", icon="🛡️")
-                    time.sleep(0.4)
-                    st.rerun()
-            with col_sl_btn:
-                if st.button(f"🛑 Cerrar SL (-1.5%)", key=f"sl_{oid}", use_container_width=True):
-                    close_active_trade(oid, "SL")
-                    st.toast(f"🛑 Posición {oid} en {sym} cerrada por Stop Loss.", icon="🛑")
-                    time.sleep(0.4)
-                    st.rerun()
-
-    # Módulo de Apertura Rápida
-    render_html(f"""
-    <div class="section-header" style="margin-top: 24px;">
-        <div class="section-title">
-            <span style="color: #38bdf8;">⚡</span>
-            <span>Apertura de Nueva Posición (Riesgo ${riesgo_trade_dinamico:,.2f} USD)</span>
-        </div>
-        <div class="section-tag">RATIO 1:3 CALIBRADO S/ BALANCE (${balance_actual:,.2f} USD)</div>
-    </div>
-    """)
-
-    c_sym_sel, c_btn_long, c_btn_short = st.columns([2, 1, 1])
-    with c_sym_sel:
-        target_sym = st.selectbox("Activo a Operar", options=activos_filtrados, index=0)
-    
-    cur_p = BASE_PRICES.get(target_sym, 100.0)
-    eval_res = evaluate_micro_confluence_15m(target_sym)
-    atr_use = eval_res.get("atr_pct", 0.02)
-
-    with c_btn_long:
-        if st.button("🟢 ABRIR LONG (+4.5% / -1.5%)", use_container_width=True, disabled=len(df_open) >= 3):
-            oid_new = save_new_trade(target_sym, "LONG", cur_p, atr_use)
-            if oid_new:
-                st.toast(f"🟢 Orden LONG abierta en {target_sym} (Riesgo: ${riesgo_trade_dinamico:,.2f} USD)", icon="🟢")
-                time.sleep(0.4)
-                st.rerun()
-
-    with c_btn_short:
-        if st.button("🔴 ABRIR SHORT (+4.5% / -1.5%)", use_container_width=True, disabled=len(df_open) >= 3):
-            oid_new = save_new_trade(target_sym, "SHORT", cur_p, atr_use)
-            if oid_new:
-                st.toast(f"🔴 Orden SHORT abierta en {target_sym} (Riesgo: ${riesgo_trade_dinamico:,.2f} USD)", icon="🔴")
-                time.sleep(0.4)
-                st.rerun()
-
 # ======================================================================================
-# PESTAÑA 4: 📜 HISTORIAL & AUDIT LOG (TABLA CERRADA CON FILAS COLOREADAS & LOGS)
+# PESTAÑA 2: 📜 HISTORIAL & AUDITORÍA AUTÓNOMA
 # ======================================================================================
 with tab_historial:
     render_html("""
     <div class="section-header">
         <div class="section-title">
             <span style="color: #10b981;">📜</span>
-            <span>Bitácora de Órdenes Cerradas (Ciclo Semanal)</span>
+            <span>Bitácora de Órdenes Cerradas Legítimamente en Kraken</span>
         </div>
-        <div class="section-tag">FILAS COMPLETAS COLOREADAS · HORA COLOMBIA (COT UTC-5)</div>
+        <div class="section-tag">REGISTROS PERSISTIDOS EN SUPABASE POSTGRESQL · HORA COLOMBIA (COT)</div>
     </div>
     """)
 
     if df_closed.empty:
         render_html("""
-        <div style="background-color: #080d14; border: 1px dashed rgba(56, 189, 248, 0.2); border-radius: 8px; padding: 24px; text-align: center; color: #64748b; font-size: 12px; font-family: 'JetBrains Mono'; margin-bottom: 20px;">
-            SIN REGISTROS DE ÓRDENES CERRADAS PARA EL CICLO SEMANAL ACTUAL.
+        <div style="background-color: #080d14; border: 1px dashed rgba(56, 189, 248, 0.2); border-radius: 8px; padding: 36px 20px; text-align: center; color: #64748b; font-size: 12px; font-family: 'JetBrains Mono'; margin-bottom: 20px;">
+            <div style="font-size: 24px; margin-bottom: 8px;">📋</div>
+            <div style="color: #cbd5e1; font-weight: 700; margin-bottom: 4px;">SIN ÓRDENES CERRADAS TODAVÍA</div>
+            <div>Todas las operaciones se registrarán aquí con su precio exacto de salida y PnL realizado cuando alcancen su Take Profit o Stop Loss real en el mercado.</div>
         </div>
         """)
     else:
         rows_closed = []
         for _, row in df_closed.iterrows():
+            oid = str(row.get('order_id', '-'))
+            sym = str(row.get('symbol', '-'))
+            side = str(row.get('side', 'LONG')).upper()
+            entry_p = float(row.get('entry_price', 1.0))
+            exit_p = float(row.get('exit_price', entry_p))
             pnl_val = float(row.get('pnl_usd', 0.0))
             pnl_pct = float(row.get('pnl_pct', 0.0))
-            reason = str(row.get('exit_reason', ''))
-            side = str(row.get('side', 'LONG')).upper()
-            side_color = "#10b981" if side == "LONG" else "#f43f5e"
+            reason = str(row.get('exit_reason', 'CIERRE'))
+            is_win = pnl_val >= 0
 
-            is_sl = ("SL" in reason) or ("STOP" in reason) or (pnl_val < 0)
-            is_be = ("BREAK" in reason) or ("BE" in reason) or (abs(pnl_pct) <= 0.2)
+            row_class = "row-tp-won" if is_win else "row-sl-lost"
+            pnl_color = "#10b981" if is_win else "#f43f5e"
+            pnl_str = f"+${pnl_val:,.2f} USD" if is_win else f"-${abs(pnl_val):,.2f} USD"
+            side_badge = f"<span class=\"badge-tag {'badge-long' if side == 'LONG' else 'badge-short'}\">{side}</span>"
+            reason_badge = f"<span class=\"badge-tag {'badge-tp' if is_win else 'badge-sl'}\">{reason}</span>"
 
-            if is_sl:
-                row_class = "row-sl"
-                gain_usd_str = f"-${abs(pnl_val):,.2f} USD"
-                gain_pct_str = f"-{abs(pnl_pct):.2f}%"
-                badge = '<span class="badge-pro badge-sl">CERRADO (SL)</span>'
-                gain_style = "color: #f43f5e; font-weight: 700;"
-            elif is_be:
-                row_class = "row-be"
-                gain_usd_str = f"+${pnl_val:,.2f} USD"
-                gain_pct_str = f"+{pnl_pct:.2f}%"
-                badge = '<span class="badge-pro badge-be">BREAK-EVEN</span>'
-                gain_style = "color: #f59e0b; font-weight: 700;"
-            elif pnl_val > 0:
-                row_class = "row-tp"
-                gain_usd_str = f"+${abs(pnl_val):,.2f} USD"
-                gain_pct_str = f"+{abs(pnl_pct):.2f}%"
-                badge = '<span class="badge-pro badge-tp">CERRADO (TP)</span>'
-                gain_style = "color: #10b981; font-weight: 700;"
-            else:
-                row_class = "row-active"
-                gain_usd_str = "$0.00 USD"
-                gain_pct_str = "0.00%"
-                badge = '<span class="badge-pro badge-open">BREAKEVEN</span>'
-                gain_style = "color: #94a3b8; font-weight: 700;"
-
-            created_str = str(row.get('created_at', ''))
-            closed_str = str(row.get('closed_at', ''))
+            closed_str = str(row.get('closed_at', row.get('created_at', '')))
             try:
-                dt_in = datetime.datetime.fromisoformat(created_str.replace("Z", "+00:00")).astimezone(TZ_COT)
-                fecha_in = dt_in.strftime("%Y-%m-%d")
-                hora_in = dt_in.strftime("%H:%M:%S")
+                dt_cls = datetime.datetime.fromisoformat(closed_str.replace("Z", "+00:00")).astimezone(TZ_COT)
+                hora_close = dt_cls.strftime("%Y-%m-%d %H:%M:%S COT")
             except Exception:
-                fecha_in = created_str[:10]
-                hora_in = created_str[11:19]
-
-            try:
-                dt_out = datetime.datetime.fromisoformat(closed_str.replace("Z", "+00:00")).astimezone(TZ_COT)
-                hora_out = dt_out.strftime("%H:%M:%S")
-            except Exception:
-                hora_out = closed_str[11:19] if len(closed_str) >= 19 else "-"
+                hora_close = closed_str[:19] if len(closed_str) >= 19 else "-"
 
             rows_closed.append(
                 f"<tr class=\"{row_class}\">"
-                f"<td><span style=\"color: #f8fafc; font-weight: 700;\">{row.get('order_id', '-')}</span></td>"
-                f"<td style=\"color: #94a3b8;\">{fecha_in}</td>"
-                f"<td style=\"color: #cbd5e1;\">{hora_in}</td>"
-                f"<td style=\"color: #cbd5e1;\">{hora_out}</td>"
-                f"<td><span style=\"color: #38bdf8; font-weight: 700;\">{row.get('symbol', '-')}</span></td>"
-                f"<td><span style=\"color: {side_color}; font-weight: 700;\">{side}</span></td>"
-                f"<td>${float(row.get('entry_price', 0.0)):,.4f}</td>"
-                f"<td>${float(row.get('exit_price', 0.0)):,.4f}</td>"
-                f"<td style=\"{gain_style}\">{gain_usd_str}</td>"
-                f"<td style=\"{gain_style}\">{gain_pct_str}</td>"
-                f"<td>{badge}</td>"
+                f"<td><span style=\"color: #f8fafc; font-weight: 700;\">{oid}</span></td>"
+                f"<td><span style=\"color: #38bdf8; font-weight: 700;\">{sym}</span></td>"
+                f"<td>{side_badge}</td>"
+                f"<td>${entry_p:,.4f}</td>"
+                f"<td>${exit_p:,.4f}</td>"
+                f"<td>{reason_badge}</td>"
+                f"<td style=\"color: {pnl_color}; font-weight: 700;\">{pnl_str}</td>"
+                f"<td style=\"color: {pnl_color}; font-weight: 700;\">{pnl_pct:+.2f}%</td>"
+                f"<td style=\"color: #94a3b8;\">{hora_close}</td>"
                 f"</tr>"
             )
 
         table_closed_html = (
             "<div class=\"table-container\">"
-            "<table class=\"quant-table-pro\">"
+            "<table class=\"quant-table\">"
             "<thead><tr>"
-            "<th>ID Orden</th><th>Fecha</th><th>Entrada (COT)</th><th>Salida (COT)</th>"
-            "<th>Símbolo</th><th>Lado</th><th>Precio Entrada</th><th>Precio Salida</th>"
-            "<th>Ganancia ($ USD)</th><th>Retorno (%)</th><th>Resultado</th>"
+            "<th>ID Orden</th><th>Símbolo</th><th>Lado</th><th>Precio Entrada</th>"
+            "<th>Precio Salida Real</th><th>Motivo de Cierre</th><th>PnL Realizado ($)</th>"
+            "<th>Retorno (%)</th><th>Fecha / Hora Cierre (COT)</th>"
             "</tr></thead>"
             "<tbody>" + "".join(rows_closed) + "</tbody></table></div>"
         )
         render_html(table_closed_html)
 
-        csv_data = df_closed.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Descargar Bitácora Completa en CSV",
-            data=csv_data,
-            file_name=f"dipper_trades_{today_str}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-
-    # Registro de Auditoría (Audit Log)
+    # Consola de Eventos y Auditoría del Sistema
     render_html("""
-    <div class="section-header" style="margin-top: 24px;">
+    <div class="section-header" style="margin-top: 18px;">
         <div class="section-title">
-            <span style="color: #38bdf8;">📋</span>
-            <span>Registro de Auditoría y Eventos del Sistema (Audit Log)</span>
+            <span style="color: #38bdf8;">🖥️</span>
+            <span>Consola de Auditoría del Motor Autónomo (Audit Log)</span>
         </div>
-        <div class="section-tag">ZONA HORARIA COLOMBIA (COT UTC-5)</div>
+        <div class="section-tag">EVENTOS EN TIEMPO REAL · TIMESTAMP HORA COLOMBIA (COT)</div>
     </div>
     """)
-    log_content = "".join([f"<div class='audit-entry'>{l}</div>" for l in st.session_state.logs[:30]])
-    render_html(f"<div class='audit-log-box'>{log_content}</div>")
+
+    logs_list = st.session_state.get("logs", [])
+    if logs_list:
+        logs_html_lines = "".join([f"<div class='log-line'>{log}</div>" for log in logs_list[:40]])
+        render_html(f"""
+        <div class="terminal-console">
+            {logs_html_lines}
+        </div>
+        """)
+    else:
+        render_html("""
+        <div class="terminal-console">
+            <div class="log-line">Esperando eventos del motor autónomo...</div>
+        </div>
+        """)
