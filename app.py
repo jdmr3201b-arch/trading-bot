@@ -1106,6 +1106,13 @@ total_pnl_usd = df_closed["pnl_usd"].sum() if total_closed > 0 else 0.0
 total_pnl_pct = (total_pnl_usd / INITIAL_CAPITAL) * 100.0
 current_capital = INITIAL_CAPITAL + total_pnl_usd
 floating_pnl_usd = df_open["pnl_usd"].sum() if not df_open.empty else 0.0
+balance_actual = current_capital + floating_pnl_usd
+
+# Cálculos dinámicos de riesgo basados en el Balance Actual (Equity en tiempo real)
+riesgo_trade_dinamico = balance_actual * 0.015
+take_profit_dinamico = balance_actual * 0.045
+stop_loss_dinamico = balance_actual * 0.015
+circuit_breaker_dinamico = balance_actual * 0.030
 
 # Profit Factor
 gross_profits = df_closed[df_closed["pnl_usd"] > 0]["pnl_usd"].sum() if total_closed > 0 else 0.0
@@ -1233,7 +1240,7 @@ with tab_resumen:
 
         <div class="kpi-card">
             <div class="kpi-label"><span>Balance Actual</span><span style="color: #38bdf8;">EQUITY</span></div>
-            <div class="kpi-value">${current_capital:,.2f}</div>
+            <div class="kpi-value">${balance_actual:,.2f}</div>
             <div class="kpi-subtext {'sub-green' if total_pnl_usd >= 0 else 'sub-red'}">
                 <span>{'+' if total_pnl_pct >= 0 else ''}{total_pnl_pct:.2f}% acumulado</span>
             </div>
@@ -1286,22 +1293,22 @@ with tab_resumen:
         <div class="section-header">
             <div class="section-title">
                 <span style="color: #38bdf8;">🛡️</span>
-                <span>Matriz Cuantitativa de Riesgo Asimétrico (1:3 - $50 USD)</span>
+                <span>Matriz Cuantitativa de Riesgo Asimétrico (1:3 - Dinámico s/ Equity)</span>
             </div>
-            <div class="section-tag">REGLAS CALIBRADAS</div>
+            <div class="section-tag">BALANCE ACTUAL: ${balance_actual:,.2f} USD</div>
         </div>
         <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; font-family: 'JetBrains Mono'; font-size: 11px; margin-bottom: 12px;">
             <div style="background: #090e17; border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 8px; padding: 12px; box-shadow: 0 0 10px rgba(56, 189, 248, 0.05);">
                 <div style="color: #64748b; font-size: 10px;">RIESGO POR TRADE (1.5%)</div>
-                <div style="color: #f8fafc; font-weight: 700; font-size: 14px; margin-top: 4px;">$0.75 USD</div>
+                <div style="color: #f8fafc; font-weight: 700; font-size: 14px; margin-top: 4px;">${riesgo_trade_dinamico:,.2f} USD</div>
             </div>
             <div style="background: #090e17; border: 1px solid rgba(16, 185, 129, 0.25); border-radius: 8px; padding: 12px; box-shadow: 0 0 10px rgba(16, 185, 129, 0.05);">
                 <div style="color: #64748b; font-size: 10px;">TAKE PROFIT (+4.5% PROM)</div>
-                <div style="color: #10b981; font-weight: 700; font-size: 14px; margin-top: 4px;">+$2.25 USD</div>
+                <div style="color: #10b981; font-weight: 700; font-size: 14px; margin-top: 4px;">+${take_profit_dinamico:,.2f} USD</div>
             </div>
             <div style="background: #090e17; border: 1px solid rgba(244, 63, 94, 0.25); border-radius: 8px; padding: 12px; box-shadow: 0 0 10px rgba(244, 63, 94, 0.05);">
                 <div style="color: #64748b; font-size: 10px;">STOP LOSS MÁXIMO (-1.5%)</div>
-                <div style="color: #f43f5e; font-weight: 700; font-size: 14px; margin-top: 4px;">-$0.75 USD</div>
+                <div style="color: #f43f5e; font-weight: 700; font-size: 14px; margin-top: 4px;">-${stop_loss_dinamico:,.2f} USD</div>
             </div>
         </div>
         <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; font-family: 'JetBrains Mono'; font-size: 11px;">
@@ -1315,7 +1322,7 @@ with tab_resumen:
             </div>
             <div style="background: #090e17; border: 1px solid rgba(245, 158, 11, 0.25); border-radius: 8px; padding: 12px;">
                 <div style="color: #64748b; font-size: 10px;">CIRCUIT BREAKER (-3.0%)</div>
-                <div style="color: #f59e0b; font-weight: 700; font-size: 14px; margin-top: 4px;">-$1.50 USD Diario</div>
+                <div style="color: #f59e0b; font-weight: 700; font-size: 14px; margin-top: 4px;">-${circuit_breaker_dinamico:,.2f} USD Diario</div>
             </div>
         </div>
         """)
@@ -1545,13 +1552,13 @@ with tab_graficos:
 # PESTAÑA 3: 💼 POSICIONES ACTIVAS CON BARRA VISUAL DE PROGRESO & KILL SWITCH
 # ======================================================================================
 with tab_posiciones:
-    render_html("""
+    render_html(f"""
     <div class="section-header">
         <div class="section-title">
             <span style="color: #38bdf8;">●</span>
             <span>Operaciones Abiertas en Kraken Spot</span>
         </div>
-        <div class="section-tag">MÁXIMO 3 CONCURRENTES · RIESGO $0.75 USD (1.5%) · TP DINÁMICO +$2.25 USD · SL -$0.75 USD</div>
+        <div class="section-tag">MÁXIMO 3 CONCURRENTES · RIESGO ${riesgo_trade_dinamico:,.2f} USD (1.5%) · TP DINÁMICO +${take_profit_dinamico:,.2f} USD · SL -${stop_loss_dinamico:,.2f} USD</div>
     </div>
     """)
 
@@ -1684,9 +1691,9 @@ with tab_posiciones:
     <div class="section-header" style="margin-top: 24px;">
         <div class="section-title">
             <span style="color: #38bdf8;">⚡</span>
-            <span>Apertura de Nueva Posición (Riesgo $0.75 USD)</span>
+            <span>Apertura de Nueva Posición (Riesgo ${riesgo_trade_dinamico:,.2f} USD)</span>
         </div>
-        <div class="section-tag">RATIO 1:3 CALIBRADO A $50 USD</div>
+        <div class="section-tag">RATIO 1:3 CALIBRADO S/ BALANCE (${balance_actual:,.2f} USD)</div>
     </div>
     """)
 
@@ -1702,7 +1709,7 @@ with tab_posiciones:
         if st.button("🟢 ABRIR LONG (+4.5% / -1.5%)", use_container_width=True, disabled=len(df_open) >= 3):
             oid_new = save_new_trade(target_sym, "LONG", cur_p, atr_use)
             if oid_new:
-                st.toast(f"🟢 Orden LONG abierta en {target_sym} (Riesgo: $0.75 USD)", icon="🟢")
+                st.toast(f"🟢 Orden LONG abierta en {target_sym} (Riesgo: ${riesgo_trade_dinamico:,.2f} USD)", icon="🟢")
                 time.sleep(0.4)
                 st.rerun()
 
@@ -1710,7 +1717,7 @@ with tab_posiciones:
         if st.button("🔴 ABRIR SHORT (+4.5% / -1.5%)", use_container_width=True, disabled=len(df_open) >= 3):
             oid_new = save_new_trade(target_sym, "SHORT", cur_p, atr_use)
             if oid_new:
-                st.toast(f"🔴 Orden SHORT abierta en {target_sym} (Riesgo: $0.75 USD)", icon="🔴")
+                st.toast(f"🔴 Orden SHORT abierta en {target_sym} (Riesgo: ${riesgo_trade_dinamico:,.2f} USD)", icon="🔴")
                 time.sleep(0.4)
                 st.rerun()
 
