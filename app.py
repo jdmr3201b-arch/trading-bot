@@ -492,6 +492,8 @@ KRAKEN_SECRET_KEY: str = os.getenv("KRAKEN_SECRET_KEY", "").strip()
 SUPABASE_URL: str = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "").strip()
 NTFY_TOPIC: str = os.getenv("NTFY_TOPIC", "PROYECTO_DIPPER_BOT_ALERTAS").strip()
+TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 HAS_SUPABASE = bool(SUPABASE_LIB and SUPABASE_URL and SUPABASE_KEY)
 supabase_client: Optional[Any] = None
@@ -558,10 +560,9 @@ BASE_PRICES: Dict[str, float] = {
 }
 
 # --------------------------------------------------------------------------------------
-# 7. CONEXIÓN A KRAKEN & ALERTAS PUSH NTFY
+# 7. CONEXIÓN A KRAKEN, RECONEXIÓN AUTOMÁTICA & ALERTAS PUSH (NTFY / TELEGRAM)
 # --------------------------------------------------------------------------------------
-@st.cache_resource
-def get_kraken_exchange() -> Optional[Any]:
+def create_kraken_instance() -> Optional[Any]:
     if not HAS_CCXT:
         return None
     try:
@@ -577,19 +578,84 @@ def get_kraken_exchange() -> Optional[Any]:
     except Exception:
         return None
 
-exchange = get_kraken_exchange()
+exchange = create_kraken_instance()
 
-def enviar_notificacion_push(titulo: str, mensaje: str):
-    """Envía notificaciones push en tiempo real a Ntfy.sh."""
-    url = f"https://ntfy.sh/{NTFY_TOPIC}"
+def reconnect_kraken() -> Optional[Any]:
+    """Reconecta de forma autónoma el cliente de Kraken si hay pérdida de socket o timeout."""
+    global exchange
     try:
-        if HAS_REQUESTS:
-            requests.post(url, data=mensaje.encode('utf-8'), headers={"Title": titulo}, timeout=3)
-        else:
-            req = urllib.request.Request(url, data=mensaje.encode('utf-8'), headers={"Title": titulo}, method="POST")
-            urllib.request.urlopen(req, timeout=3)
+        exchange = create_kraken_instance()
+        return exchange
+    except Exception:
+        return None
+
+def enviar_notificacion_push(titulo: str, mensaje: str, priority: str = "default", tags: str = ""):
+    """
+    Envía notificaciones push instantáneas al teléfono celular.
+    - Canal 1 (Ntfy.sh): Inmediato, sin registros ni apps de pago.
+    - Canal 2 (Telegram Bot): Si TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID están configurados.
+    """
+    # 1. Ntfy.sh Webhook
+    if NTFY_TOPIC:
+        url_ntfy = f"https://ntfy.sh/{NTFY_TOPIC}"
+        headers = {
+            "Title": titulo,
+            "Priority": priority if priority in ["min", "low", "default", "high", "urgent"] else "default"
+        }
+        if tags:
+            headers["Tags"] = tags
+        try:
+            if HAS_REQUESTS:
+                requests.post(url_ntfy, data=mensaje.encode('utf-8'), headers=headers, timeout=4)
+            else:
+                req = urllib.request.Request(url_ntfy, data=mensaje.encode('utf-8'), headers=headers, method="POST")
+                urllib.request.urlopen(req, timeout=4)
+        except Exception:
+            pass
+
+    # 2. Telegram Bot Webhook (opcional)
+    if TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID:
+        try:
+            tg_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            tg_data = json.dumps({
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": f"<b>{titulo}</b>\n\n{mensaje}",
+                "parse_mode": "HTML"
+            }).encode('utf-8')
+            tg_headers = {"Content-Type": "application/json"}
+            if HAS_REQUESTS:
+                requests.post(tg_url, data=tg_data, headers=tg_headers, timeout=4)
+            else:
+                req_tg = urllib.request.Request(tg_url, data=tg_data, headers=tg_headers, method="POST")
+                urllib.request.urlopen(req_tg, timeout=4)
+        except Exception:
+            pass
+
+def get_current_asset_price(symbol: str) -> float:
+    """Obtiene el precio en vivo de Kraken con reconexión proactiva y tolerancia total a fallos."""
+    global exchange
+    if exchange is not None:
+        try:
+            ticker = exchange.fetch_ticker(symbol)
+            if ticker and 'last' in ticker and ticker['last']:
+                return float(ticker['last'])
+        except Exception:
+            reconnect_kraken()
+
+    pair_kraken = KRAKEN_REST_PAIRS.get(symbol, symbol.replace('/', ''))
+    try:
+        url = f"https://api.kraken.com/0/public/Ticker?pair={pair_kraken}"
+        req = urllib.request.Request(url, headers={"User-Agent": "DipperExecutiveQuant/3.1"})
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            data = json.loads(resp.read().decode())
+            res = data.get('result', {})
+            for _, val in res.items():
+                if 'c' in val and len(val['c']) > 0:
+                    return float(val['c'][0])
     except Exception:
         pass
+
+    return BASE_PRICES.get(symbol, 100.0)
 
 # --------------------------------------------------------------------------------------
 # 8. CÁLCULO DE INDICADORES TÉCNICOS & GATILLO MICRO 15M (RSI, ATR, SMC, VOLUMEN)
@@ -603,39 +669,42 @@ def fetch_kraken_ohlcv(symbol: str, timeframe: str = '15m', limit: int = 60) -> 
 
     df: Optional[pd.DataFrame] = None
 
-    # Intento 1: CCXT
+    # Intento 1: CCXT con reconexión automática si falla
     if exchange is not None:
         try:
             raw = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
             if raw and len(raw) > 5:
                 df = pd.DataFrame(raw, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
         except Exception:
+            reconnect_kraken()
             df = None
 
-    # Intento 2: Kraken Public REST API
+    # Intento 2: Kraken Public REST API con reintento
     if df is None or df.empty:
-        try:
-            url = f"https://api.kraken.com/0/public/OHLC?pair={pair_kraken}&interval={interval_min}"
-            req = urllib.request.Request(url, headers={"User-Agent": "DipperExecutiveQuant/3.1"})
-            with urllib.request.urlopen(req, timeout=4) as response:
-                data = json.loads(response.read().decode())
-                res = data.get('result', {})
-                cand_key = [k for k in res.keys() if k != 'last']
-                if cand_key:
-                    raw_candles = res[cand_key[0]][-limit:]
-                    rows = []
-                    for c in raw_candles:
-                        rows.append({
-                            'timestamp': int(c[0]) * 1000,
-                            'open': float(c[1]),
-                            'high': float(c[2]),
-                            'low': float(c[3]),
-                            'close': float(c[4]),
-                            'volume': float(c[6])
-                        })
-                    df = pd.DataFrame(rows)
-        except Exception:
-            df = None
+        for _ in range(2):
+            try:
+                url = f"https://api.kraken.com/0/public/OHLC?pair={pair_kraken}&interval={interval_min}"
+                req = urllib.request.Request(url, headers={"User-Agent": "DipperExecutiveQuant/3.1"})
+                with urllib.request.urlopen(req, timeout=4) as response:
+                    data = json.loads(response.read().decode())
+                    res = data.get('result', {})
+                    cand_key = [k for k in res.keys() if k != 'last']
+                    if cand_key:
+                        raw_candles = res[cand_key[0]][-limit:]
+                        rows = []
+                        for c in raw_candles:
+                            rows.append({
+                                'timestamp': int(c[0]) * 1000,
+                                'open': float(c[1]),
+                                'high': float(c[2]),
+                                'low': float(c[3]),
+                                'close': float(c[4]),
+                                'volume': float(c[6])
+                            })
+                        df = pd.DataFrame(rows)
+                        break
+            except Exception:
+                time.sleep(0.5)
 
     # Intento 3: Generador Sintético de Emergencia
     if df is None or df.empty:
@@ -926,13 +995,15 @@ def save_new_trade(symbol: str, side: str, entry_price: float, atr_pct: float) -
     log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [ACTION] ORDEN AUTÓNOMA: {order_id} {side} en {symbol} @ ${entry_price:,.4f} [Riesgo: ${riesgo_usd:,.2f} USD | TP: +{tp_pct_calc*100:.1f}% | SL: -1.5%]"
     st.session_state.logs.insert(0, log_msg)
     enviar_notificacion_push(
-        f"🟢 NUEVA ORDEN: {symbol} [{side}]",
-        f"ID: {order_id}\nEntrada: ${entry_price:,.4f}\nTP: ${tp_price:,.4f} (+{tp_pct_calc*100:.1f}%)\nSL: ${sl_price:,.4f} (-1.5%)\nRiesgo: ${riesgo_usd:,.2f} USD"
+        f"🟢 NUEVA ENTRADA: {symbol} [{side}]",
+        f"ID: {order_id}\nEntrada: ${entry_price:,.4f}\nTP (+{tp_pct_calc*100:.1f}%): ${tp_price:,.4f}\nSL (-1.5%): ${sl_price:,.4f}\nRiesgo: ${riesgo_usd:,.2f} USD\nCapital Base: ${capital_real:,.2f} USD",
+        priority="high",
+        tags="rocket,chart_with_upwards_trend"
     )
     return order_id
 
 def close_active_trade(order_id: str, outcome: str):
-    """Cierra una posición activa calculando PnL exacto proporcional a los $50 USD."""
+    """Cierra una posición activa calculando PnL exacto proporcional a los $50 USD y envía notificación push."""
     df_current = load_trades_data()
     if df_current.empty:
         return
@@ -945,7 +1016,7 @@ def close_active_trade(order_id: str, outcome: str):
     entry_p = float(row.get('entry_price', 100.0))
     side = str(row.get('side', 'LONG')).upper()
     sym = str(row.get('symbol', 'BTC/USD'))
-    tp_target = float(row.get('tp', entry_p * 1.045))
+    tp_target = float(row.get('tp', entry_p * 1.045 if side == 'LONG' else entry_p * 0.955))
 
     closed_pnl_so_far = df_current[df_current['status'] == 'CLOSED']['pnl_usd'].sum()
     cap_base = INITIAL_CAPITAL + closed_pnl_so_far
@@ -987,10 +1058,36 @@ def close_active_trade(order_id: str, outcome: str):
 
     log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [ACTION] CIERRE EJECUTADO: {order_id} ({side}) {sym} por {outcome} | PnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:,.2f} USD ({pnl_pct:+.2f}%)"
     st.session_state.logs.insert(0, log_msg)
-    enviar_notificacion_push(
-        f"🎯 CIERRE: {sym} por {outcome}",
-        f"ID: {order_id}\nPnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:,.2f} USD\nRetorno: {pnl_pct:+.2f}%\nMotivo: {reason}"
-    )
+
+    # Disparo de alerta push según el resultado del trade
+    if outcome == "TP":
+        enviar_notificacion_push(
+            f"🎯 TAKE PROFIT ALCANZADO: {sym}",
+            f"ID: {order_id} ({side})\nPrecio Salida: ${exit_p:,.4f}\nPnL: +${pnl_usd:,.2f} USD (+{pnl_pct:.2f}%)\n¡Objetivo +4.5% completado exitosamente!",
+            priority="high",
+            tags="tada,moneybag,white_check_mark"
+        )
+    elif outcome == "SL":
+        enviar_notificacion_push(
+            f"🛑 STOP LOSS EJECUTADO: {sym}",
+            f"ID: {order_id} ({side})\nPrecio Salida: ${exit_p:,.4f}\nPnL: -${abs(pnl_usd):,.2f} USD ({pnl_pct:.2f}%)\nCapital protegido al -1.5%.",
+            priority="high",
+            tags="stop_sign,shield"
+        )
+    elif outcome == "BE":
+        enviar_notificacion_push(
+            f"🛡️ BREAK-EVEN EJECUTADO: {sym}",
+            f"ID: {order_id} ({side})\nPrecio Salida: ${exit_p:,.4f}\nPnL: +${pnl_usd:,.2f} USD\nCierre a precio de entrada sin riesgo.",
+            priority="default",
+            tags="shield"
+        )
+    else:
+        enviar_notificacion_push(
+            f"🎯 CIERRE: {sym} por {outcome}",
+            f"ID: {order_id}\nPnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:,.2f} USD\nRetorno: {pnl_pct:+.2f}%\nMotivo: {reason}",
+            priority="default",
+            tags="chart"
+        )
 
 def kill_switch_close_all():
     """BOTÓN DE PÁNICO: Cierra inmediatamente todas las posiciones abiertas a mercado."""
@@ -1009,7 +1106,12 @@ def kill_switch_close_all():
 
     msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [EMERGENCY] KILL SWITCH ACCIONADO: {count} posiciones cerradas inmediatamente a mercado."
     st.session_state.logs.insert(0, msg)
-    enviar_notificacion_push("🚨 KILL SWITCH ACTIVADO", f"Se han liquidado forzosamente {count} posiciones abiertas para resguardo de capital.")
+    enviar_notificacion_push(
+        "🚨 KILL SWITCH ACTIVADO",
+        f"Se han liquidado forzosamente {count} posiciones abiertas para resguardo de capital.",
+        priority="urgent",
+        tags="skull,rotating_light"
+    )
     st.toast(f"🚨 KILL SWITCH EJECUTADO: {count} posiciones cerradas a mercado.", icon="🚨")
 
 def execute_autonomous_market_scan(verbose: bool = False) -> List[str]:
@@ -1037,7 +1139,7 @@ def execute_autonomous_market_scan(verbose: bool = False) -> List[str]:
         act = confl.get("action", "HOLD")
 
         if act in ["LONG", "SHORT"]:
-            cur_p = BASE_PRICES.get(sym, 100.0)
+            cur_p = get_current_asset_price(sym)
             atr_u = confl.get("atr_pct", 0.02)
             oid = save_new_trade(sym, act, cur_p, atr_u)
             if oid:
@@ -1050,20 +1152,117 @@ def execute_autonomous_market_scan(verbose: bool = False) -> List[str]:
 
     return scan_logs
 
+def monitor_and_auto_close_open_trades():
+    """
+    Monitor de alta frecuencia:
+    Evalúa en tiempo real si las posiciones abiertas alcanzaron Take Profit (+4.5%) o Stop Loss (-1.5%)
+    y las liquida automáticamente con alerta instantánea al teléfono.
+    """
+    try:
+        df_current = load_trades_data()
+        if df_current.empty:
+            return
+
+        open_trades = df_current[df_current['status'] == 'OPEN']
+        if open_trades.empty:
+            return
+
+        for _, row in open_trades.iterrows():
+            oid = str(row.get('order_id'))
+            sym = str(row.get('symbol'))
+            side = str(row.get('side', 'LONG')).upper()
+            entry_p = float(row.get('entry_price', 100.0))
+            sl_p = float(row.get('sl', entry_p * 0.985 if side == 'LONG' else entry_p * 1.015))
+            tp_p = float(row.get('tp', entry_p * 1.045 if side == 'LONG' else entry_p * 0.955))
+
+            cur_p = get_current_asset_price(sym)
+
+            if side == 'LONG':
+                if cur_p >= tp_p:
+                    close_active_trade(oid, "TP")
+                elif cur_p <= sl_p:
+                    close_active_trade(oid, "SL")
+            else:  # SHORT
+                if cur_p <= tp_p:
+                    close_active_trade(oid, "TP")
+                elif cur_p >= sl_p:
+                    close_active_trade(oid, "SL")
+    except Exception:
+        pass
+
+_GLOBAL_DAEMON_INITIALIZED = False
+
 def run_autonomous_trading_daemon():
-    """Hilo demonio que ejecuta el escáner y trailing stop de forma continua cada 15 minutos."""
+    """
+    Bucle de reconexión indestructible (24/7 en Render):
+    - try/except con auto-reconexión a Kraken si la API cae por un segundo.
+    - Supervisión continua cada 15 segundos para Take Profit (+4.5%), Stop Loss (-1.5%) y Trailing Stop.
+    - Escaneo y apertura por confluencia cada 15 minutos (con reintento tras 5s si Kraken tuvo lag).
+    - Monitoreo continuo de Circuit Breaker Diario (-3.0%) con alerta de emergencia push al celular.
+    """
+    last_scan_time = 0
+    circuit_breaker_alerted_date = None
+
     while True:
         try:
-            execute_autonomous_market_scan(verbose=False)
-            apply_trailing_stop_to_breakeven()
-        except Exception:
-            pass
-        time.sleep(900)
+            now_epoch = time.time()
+            now_dt = now_cot()
+            today_str = now_dt.strftime("%Y-%m-%d")
 
-if "trading_daemon_initialized" not in st.session_state:
-    st.session_state.trading_daemon_initialized = True
-    t_trade = threading.Thread(target=run_autonomous_trading_daemon, daemon=True)
-    t_trade.start()
+            # 1. Monitoreo y ejecución de TP / SL / Trailing Stop en tiempo real
+            try:
+                monitor_and_auto_close_open_trades()
+                apply_trailing_stop_to_breakeven()
+            except Exception:
+                pass
+
+            # 2. Control de Circuit Breaker Diario (-3.0%)
+            try:
+                df_chk = load_trades_data()
+                if not df_chk.empty:
+                    df_closed_today = df_chk[(df_chk['status'] == 'CLOSED') & (df_chk['created_at'].astype(str).str.startswith(today_str))]
+                    loss_today = df_closed_today['pnl_usd'].sum() if not df_closed_today.empty else 0.0
+                    if loss_today <= (INITIAL_CAPITAL * DAILY_CIRCUIT_BREAKER):
+                        if circuit_breaker_alerted_date != today_str:
+                            circuit_breaker_alerted_date = today_str
+                            enviar_notificacion_push(
+                                "🚨 CIRCUIT BREAKER ACTIVADO (-3.0%)",
+                                f"Pérdida diaria: ${loss_today:,.2f} USD ({loss_today/INITIAL_CAPITAL*100:.2f}%).\nNuevas operaciones bloqueadas por el resto del día para resguardo del capital.",
+                                priority="urgent",
+                                tags="warning,rotating_light,fire"
+                            )
+            except Exception:
+                pass
+
+            # 3. Escaneo de 18 Pares cada 15 minutos (o al inicio) con auto-reintento
+            if (now_epoch - last_scan_time) >= 900:
+                try:
+                    execute_autonomous_market_scan(verbose=False)
+                    last_scan_time = now_epoch
+                except Exception:
+                    time.sleep(5)
+                    try:
+                        reconnect_kraken()
+                        execute_autonomous_market_scan(verbose=False)
+                        last_scan_time = now_epoch
+                    except Exception:
+                        last_scan_time = now_epoch
+
+        except Exception:
+            # Blindaje ante cualquier error: duerme 3s y reanuda solo
+            time.sleep(3)
+
+        time.sleep(15)
+
+def start_indestructible_daemon():
+    """Asegura la inicialización única del hilo global indestructible en Render."""
+    global _GLOBAL_DAEMON_INITIALIZED
+    if not _GLOBAL_DAEMON_INITIALIZED:
+        _GLOBAL_DAEMON_INITIALIZED = True
+        t_trade = threading.Thread(target=run_autonomous_trading_daemon, daemon=True, name="DipperAutonomousRender")
+        t_trade.start()
+
+start_indestructible_daemon()
 
 apply_trailing_stop_to_breakeven()
 
@@ -1146,6 +1345,16 @@ else:
     today_pnl_usd = 0.0
 today_pnl_pct = (today_pnl_usd / INITIAL_CAPITAL) * 100.0
 circuit_active = today_pnl_pct <= (DAILY_CIRCUIT_BREAKER * 100.0)
+
+if circuit_active:
+    if "cb_alert_sent_today" not in st.session_state or st.session_state.cb_alert_sent_today != today_str:
+        st.session_state.cb_alert_sent_today = today_str
+        enviar_notificacion_push(
+            "🚨 CIRCUIT BREAKER ACTIVADO (-3.0%)",
+            f"Límite de pérdida diaria alcanzado: -${abs(today_pnl_usd):,.2f} USD ({today_pnl_pct:.2f}%).\nNuevas operaciones bloqueadas hasta el próximo ciclo para resguardo de capital.",
+            priority="urgent",
+            tags="warning,rotating_light,fire"
+        )
 
 # Sincronización daily_metrics en Supabase
 if HAS_SUPABASE and supabase_client:
