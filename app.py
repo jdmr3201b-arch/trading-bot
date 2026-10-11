@@ -39,8 +39,16 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from typing import Optional, Dict, Any, Tuple, List
 
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import numpy as np
+
+# Auto-refresco en vivo de Streamlit
+try:
+    from streamlit_autorefresh import st_autorefresh
+except ImportError:
+    def st_autorefresh(interval: int = 15000, key: str = "datarefreshcounter", limit: Optional[int] = None):
+        return 0
 
 # CCXT y Requests condicionales
 try:
@@ -72,6 +80,11 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+# --------------------------------------------------------------------------------------
+# AUTO-REFRESCO SILENCIOSO EN VIVO (CADA 15 SEGUNDOS)
+# --------------------------------------------------------------------------------------
+count = st_autorefresh(interval=15000, key="datarefreshcounter")
 
 # --------------------------------------------------------------------------------------
 # 2. ZONA HORARIA COLOMBIA (COT / UTC-5) & HELPER HTML SEGURO
@@ -1275,7 +1288,6 @@ if HAS_SUPABASE and supabase_client:
 col_h_brand, col_h_filter = st.columns([3, 2])
 
 with col_h_brand:
-    hora_cot_str = now_cot().strftime('%H:%M:%S')
     render_html(f"""
     <div class="exec-brand-box">
         <div class="exec-logo-icon">⚡</div>
@@ -1292,9 +1304,6 @@ with col_h_brand:
                 <div class="status-badge" style="color: {'#38bdf8' if HAS_SUPABASE else '#94a3b8'};">
                     <span>SUPABASE: {'POSTGRES OK' if HAS_SUPABASE else 'STANDALONE'}</span>
                 </div>
-                <div class="status-badge" style="color: #cbd5e1;">
-                    <span>HORA COT: <b>{hora_cot_str}</b></span>
-                </div>
                 <div class="status-badge" style="color: {'#10b981' if not circuit_active else '#f43f5e'};">
                     <span>CIRCUIT BREAKER: {'NORMAL' if not circuit_active else 'DISPARADO'}</span>
                 </div>
@@ -1305,6 +1314,66 @@ with col_h_brand:
         </div>
     </div>
     """)
+    # Reloj interactivo en tiempo real sincronizado segundo a segundo con el navegador del usuario (HTML + JS)
+    components.html("""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background: transparent;
+        overflow: hidden;
+        font-family: 'JetBrains Mono', monospace;
+      }
+      .live-clock-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 4px 12px;
+        border-radius: 9999px;
+        font-size: 11px;
+        font-weight: 600;
+        background-color: #191919;
+        border: 1px solid #3E3E3E;
+        color: #E3E3E3;
+        letter-spacing: 0.02em;
+        white-space: nowrap;
+        box-sizing: border-box;
+      }
+      .clock-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background-color: #38bdf8;
+        box-shadow: 0 0 6px #38bdf8;
+      }
+    </style>
+    </head>
+    <body>
+      <div class="live-clock-badge">
+        <div class="clock-dot"></div>
+        <span>HORA LOCAL: <b id="live-clock-time" style="color: #ffffff;">--:--:--</b></span>
+      </div>
+      <script>
+        function updateLiveClock() {
+          const now = new Date();
+          const h = String(now.getHours()).padStart(2, '0');
+          const m = String(now.getMinutes()).padStart(2, '0');
+          const s = String(now.getSeconds()).padStart(2, '0');
+          const target = document.getElementById('live-clock-time');
+          if (target) {
+            target.textContent = h + ':' + m + ':' + s;
+          }
+        }
+        updateLiveClock();
+        setInterval(updateLiveClock, 1000);
+      </script>
+    </body>
+    </html>
+    """, height=30)
 
 with col_h_filter:
     categoria_seleccionada = st.selectbox(
