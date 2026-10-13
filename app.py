@@ -463,12 +463,22 @@ TELEGRAM_CHAT_ID: str = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
 HAS_SUPABASE = bool(SUPABASE_LIB and SUPABASE_URL and SUPABASE_KEY)
 supabase_client: Optional[Any] = None
-if HAS_SUPABASE:
-    try:
-        supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
-    except Exception:
-        supabase_client = None
-        HAS_SUPABASE = False
+
+def get_supabase_client() -> Optional[Any]:
+    """Retorna o reconecta el cliente de Supabase de manera resiliente tras reinicios de Render."""
+    global supabase_client, HAS_SUPABASE
+    if supabase_client is not None:
+        return supabase_client
+    if SUPABASE_LIB and SUPABASE_URL and SUPABASE_KEY:
+        try:
+            supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+            HAS_SUPABASE = True
+            return supabase_client
+        except Exception as e:
+            logging.error(f"Fallo al conectar cliente Supabase: {e}")
+    return None
+
+supabase_client = get_supabase_client()
 
 # --------------------------------------------------------------------------------------
 # 6. UNIVERSO EXPANDIDO: 35 ACTIVOS LÍQUIDOS EN KRAKEN SPOT
@@ -532,12 +542,32 @@ def create_kraken_exchange() -> Optional[Any]:
 exchange = create_kraken_exchange()
 
 def reconnect_kraken():
-    """Reconecta el exchange CCXT de Kraken de forma autónoma."""
+    """Reconecta el exchange CCXT de Kraken de forma autónoma liberando memoria residual."""
     global exchange
     try:
+        old_ex = exchange
+        exchange = None
+        if old_ex is not None:
+            del old_ex
+        gc.collect()
         exchange = create_kraken_exchange()
-    except Exception:
-        pass
+    except Exception as e:
+        notificar_error_api("KRAKEN SPOT", str(e))
+
+_LAST_API_ERROR_NOTIF_TIME = 0.0
+
+def notificar_error_api(servicio: str, detalle: str):
+    """Envía alerta push si ocurre un fallo crítico de API, limitado a 1 vez cada 30 minutos para evitar saturación."""
+    global _LAST_API_ERROR_NOTIF_TIME
+    now = time.time()
+    if (now - _LAST_API_ERROR_NOTIF_TIME) > 1800:
+        _LAST_API_ERROR_NOTIF_TIME = now
+        enviar_notificacion_push(
+            f"⚠️ ALERTA CONECTIVIDAD: {servicio}",
+            f"Fallo detectado: {detalle}\nEl motor aplicará reintento y reconexión automática en el siguiente ciclo.",
+            priority="high",
+            tags="warning,plug"
+        )
 
 def enviar_notificacion_push(titulo: str, mensaje: str, priority: str = "default", tags: str = ""):
     """Envía notificaciones push instantáneas a Ntfy.sh y Telegram."""
@@ -626,8 +656,11 @@ def analyze_pair_confluence_4h(symbol: str) -> Dict[str, Any]:
         except Exception:
             df = None
 
-    # Si la API no retorna datos suficientes, retornar estructura segura con ceros
+    # Si la API no retorna datos suficientes, retornar estructura segura con ceros liberando memoria
     if df is None or df.empty or len(df) < 15:
+        if df is not None:
+            del df
+            gc.collect()
         return {
             "symbol": symbol,
             "price": 0.0,
@@ -667,10 +700,10 @@ def analyze_pair_confluence_4h(symbol: str) -> Dict[str, Any]:
         span_calc = min(200, len(close_series))
         ema200_val = float(close_series.ewm(span=span_calc, adjust=False).mean().iloc[-1])
 
-        # 2. RSI 14
+        # 2. RSI 14 (Suavizado Canónico de Welles Wilder)
         delta = close_series.diff()
-        gain = delta.clip(lower=0).rolling(window=14, min_periods=1).mean()
-        loss = (-delta.clip(upper=0)).rolling(window=14, min_periods=1).mean()
+        gain = delta.clip(lower=0).ewm(alpha=1.0/14.0, adjust=False).mean()
+        loss = (-delta.clip(upper=0)).ewm(alpha=1.0/14.0, adjust=False).mean()
         rs = gain / (loss + 1e-9)
         rsi_val = float((100 - (100 / (1 + rs))).iloc[-1])
 
@@ -752,26 +785,48 @@ def get_current_asset_price(symbol: str) -> float:
 # 9. PERSISTENCIA EN SUPABASE, MEMORIA Y REGISTRO DE TRADES EN VIVO
 # --------------------------------------------------------------------------------------
 _GLOBAL_TRADES_STORE: List[Dict[str, Any]] = []
+_GLOBAL_SYSTEM_LOGS: List[str] = [
+    f"[{now_cot().strftime('%H:%M:%S COT')}] [SYSTEM] Proyecto Dipper v4.0 inicializado con gestión de RAM < 200 MB.",
+    f"[{now_cot().strftime('%H:%M:%S COT')}] [MONITOR] Universo ampliado a 35 criptoactivos en Kraken Spot (4H limit=210).",
+    f"[{now_cot().strftime('%H:%M:%S COT')}] [CAPITAL] Capital Base calibrado en $50.00 USD. Modo: LIVE / AUTÓNOMO EXEC."
+]
+
+def add_system_log(msg: str):
+    """Registra eventos de forma segura tanto para el hilo de fondo como para Streamlit."""
+    global _GLOBAL_SYSTEM_LOGS
+    _GLOBAL_SYSTEM_LOGS.insert(0, msg)
+    if len(_GLOBAL_SYSTEM_LOGS) > 50:
+        _GLOBAL_SYSTEM_LOGS = _GLOBAL_SYSTEM_LOGS[:50]
+    try:
+        if "logs" in st.session_state:
+            st.session_state.logs.insert(0, msg)
+            if len(st.session_state.logs) > 50:
+                st.session_state.logs = st.session_state.logs[:50]
+    except Exception:
+        pass
 
 if "initialized" not in st.session_state:
     st.session_state.initialized = True
-    st.session_state.logs = [
-        f"[{now_cot().strftime('%H:%M:%S COT')}] [SYSTEM] Proyecto Dipper v4.0 inicializado con gestión de RAM < 200 MB.",
-        f"[{now_cot().strftime('%H:%M:%S COT')}] [MONITOR] Universo ampliado a 35 criptoactivos en Kraken Spot (4H limit=210).",
-        f"[{now_cot().strftime('%H:%M:%S COT')}] [CAPITAL] Capital Base calibrado en $50.00 USD. Modo: LIVE / AUTÓNOMO EXEC."
-    ]
+    st.session_state.logs = list(_GLOBAL_SYSTEM_LOGS)
 
 def load_trades_data() -> pd.DataFrame:
-    """Carga órdenes reales desde Supabase o estructura interna en memoria."""
+    """Carga órdenes reales desde Supabase o estructura interna en memoria de forma resiliente."""
     global _GLOBAL_TRADES_STORE
-    if HAS_SUPABASE and supabase_client:
+    sb = get_supabase_client()
+    if sb is not None:
         try:
-            res = supabase_client.table("paper_trades").select("*").order("created_at", desc=True).execute()
-            if res.data is not None and len(res.data) > 0:
+            res = sb.table("paper_trades").select("*").order("created_at", desc=True).execute()
+            if res.data is not None:
                 _GLOBAL_TRADES_STORE = list(res.data)
-                return pd.DataFrame(res.data)
-        except Exception:
-            pass
+                if len(res.data) > 0:
+                    return pd.DataFrame(res.data)
+                return pd.DataFrame(columns=[
+                    "order_id", "symbol", "side", "status", "entry_price", "exit_price",
+                    "sl", "tp", "pnl_usd", "pnl_pct", "exit_reason", "trailing_be",
+                    "created_at", "closed_at"
+                ])
+        except Exception as e:
+            logging.error(f"Fallo al sincronizar trades con Supabase: {e}")
 
     if _GLOBAL_TRADES_STORE:
         return pd.DataFrame(_GLOBAL_TRADES_STORE)
@@ -809,31 +864,36 @@ def register_long_position(sym: str, cur_p: float, analysis: Optional[Dict[str, 
         if sym in open_symbols:
             return None
 
-        if cur_p <= 0:
+        # Obtener precio de ejecución SPOT en tiempo real de Kraken
+        spot_p = get_current_asset_price(sym)
+        execution_price = spot_p if spot_p > 0.0 else cur_p
+        if execution_price <= 0.0:
             return None
 
         closed_pnl = df_current[df_current['status'] == 'CLOSED']['pnl_usd'].sum() if not df_current.empty else 0.0
         capital_real = INITIAL_CAPITAL + closed_pnl
         riesgo_usd = capital_real * RISK_PER_TRADE
 
-        sl_price = cur_p * (1.0 - STOP_LOSS_PCT)
-        tp_price = cur_p * (1.0 + TAKE_PROFIT_PCT)
+        # Matemática cuantitativa estricta: SL = execution_price * 0.985 (-1.5%) | TP = execution_price * 1.045 (+4.5%)
+        sl_price = execution_price * (1.0 - STOP_LOSS_PCT)
+        tp_price = execution_price * (1.0 + TAKE_PROFIT_PCT)
         order_id = f"DIP-{math.floor(100000 + (time.time() * 1000) % 900000)}"
         now_iso = now_cot().isoformat()
 
         new_trade = {
             "order_id": order_id, "symbol": sym, "side": "LONG", "status": "OPEN",
-            "entry_price": cur_p, "exit_price": None, "sl": sl_price, "tp": tp_price,
+            "entry_price": execution_price, "exit_price": None, "sl": sl_price, "tp": tp_price,
             "pnl_usd": 0.0, "pnl_pct": 0.0, "exit_reason": None, "trailing_be": False,
             "created_at": now_iso, "closed_at": None
         }
 
-        # 1. Persistencia en Supabase
-        if HAS_SUPABASE and supabase_client:
+        # 1. Persistencia resiliente en Supabase
+        sb = get_supabase_client()
+        if sb is not None:
             try:
-                supabase_client.table("paper_trades").insert(new_trade).execute()
+                sb.table("paper_trades").insert(new_trade).execute()
             except Exception as e:
-                logging.debug(f"Error insertando trade en Supabase: {e}")
+                logging.error(f"Error insertando trade en Supabase: {e}")
 
         # 2. Persistencia en memoria global compartida
         _GLOBAL_TRADES_STORE.insert(0, new_trade)
@@ -846,11 +906,7 @@ def register_long_position(sym: str, cur_p: float, analysis: Optional[Dict[str, 
             pass
 
         log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [LIVE EXEC] ¡ENTRADA EJECUTADA! Orden LONG en {sym} @ ${cur_p:,.4f} [Riesgo: ${riesgo_usd:,.2f} USD | TP: +4.5% | SL: -1.5%]"
-        try:
-            if "logs" in st.session_state:
-                st.session_state.logs.insert(0, log_msg)
-        except Exception:
-            pass
+        add_system_log(log_msg)
 
         enviar_notificacion_push(
             f"🟢 NUEVA ENTRADA LIVE: {sym} [LONG]",
@@ -876,8 +932,10 @@ def apply_trailing_stop_to_breakeven():
         sym = str(row.get('symbol'))
         entry_p = float(row.get('entry_price', 1.0))
         cur_p = get_current_asset_price(sym)
-        trailing_done = bool(row.get('trailing_be', False))
+        if cur_p <= 0.0:
+            continue
 
+        trailing_done = bool(row.get('trailing_be', False))
         pnl_float_pct = ((cur_p - entry_p) / entry_p) * 100.0
 
         if not trailing_done and pnl_float_pct >= (TRAILING_TRIGGER_PCT * 100.0):
@@ -894,22 +952,22 @@ def apply_trailing_stop_to_breakeven():
             except Exception:
                 pass
 
-            if HAS_SUPABASE and supabase_client:
+            sb = get_supabase_client()
+            if sb is not None:
                 try:
-                    supabase_client.table("paper_trades").update({"sl": new_sl, "trailing_be": True}).eq("order_id", oid).execute()
-                except Exception:
-                    pass
+                    sb.table("paper_trades").update({"sl": new_sl, "trailing_be": True}).eq("order_id", oid).execute()
+                except Exception as e:
+                    logging.error(f"Error actualizando trailing SL en Supabase: {e}")
 
             msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [PROTECTION] Trailing a Break-Even en {sym} (+{pnl_float_pct:.2f}%). SL en ${new_sl:,.4f} (+0.1%)."
-            try:
-                if "logs" in st.session_state:
-                    st.session_state.logs.insert(0, msg)
-            except Exception:
-                pass
-            enviar_notificacion_push(f"🛡️ BREAK-EVEN: {sym}", f"Orden {oid} protegió entrada en ${new_sl:,.4f} (+0.1%).")
+            add_system_log(msg)
+            enviar_notificacion_push(
+                f"🛡️ BREAK-EVEN ACTIVADO: {sym}",
+                f"Orden {oid} protegió entrada en ${new_sl:,.4f} (+0.1%). Ganancia flotante alcanzó +{pnl_float_pct:.2f}%."
+            )
 
 def close_active_trade(order_id: str, outcome: str, actual_exit_price: Optional[float] = None):
-    """Liquida una posición activa al tocar TP o SL con el precio real de Kraken."""
+    """Liquida una posición activa al tocar TP o SL con el precio real de Kraken y cálculo dinámico de PnL."""
     global _GLOBAL_TRADES_STORE
     df_current = load_trades_data()
     if df_current.empty:
@@ -925,35 +983,36 @@ def close_active_trade(order_id: str, outcome: str, actual_exit_price: Optional[
     tp_target = float(row.get('tp', entry_p * (1.0 + TAKE_PROFIT_PCT)))
     sl_target = float(row.get('sl', entry_p * (1.0 - STOP_LOSS_PCT)))
 
-    closed_pnl_so_far = df_current[df_current['status'] == 'CLOSED']['pnl_usd'].sum()
+    closed_pnl_so_far = df_current[df_current['status'] == 'CLOSED']['pnl_usd'].sum() if not df_current.empty else 0.0
     cap_base = INITIAL_CAPITAL + closed_pnl_so_far
 
     if outcome == "TP":
-        exit_p = actual_exit_price if actual_exit_price is not None else tp_target
-        pnl_pct = abs((exit_p - entry_p) / entry_p) * 100.0
+        exit_p = actual_exit_price if (actual_exit_price is not None and actual_exit_price > 0) else tp_target
+        pnl_pct = ((exit_p - entry_p) / entry_p) * 100.0
         pnl_usd = cap_base * (pnl_pct / 100.0)
         reason = f"TAKE PROFIT (+{pnl_pct:.2f}%)"
     elif outcome == "BE":
-        exit_p = actual_exit_price if actual_exit_price is not None else (entry_p * 1.001)
-        pnl_pct = 0.1
-        pnl_usd = cap_base * 0.001
-        reason = "BREAK-EVEN (+0.1%)"
+        exit_p = actual_exit_price if (actual_exit_price is not None and actual_exit_price > 0) else (entry_p * (1.0 + TRAILING_BE_PCT))
+        pnl_pct = ((exit_p - entry_p) / entry_p) * 100.0
+        pnl_usd = cap_base * (pnl_pct / 100.0)
+        reason = f"BREAK-EVEN (+{pnl_pct:.2f}%)"
     else:  # SL
-        exit_p = actual_exit_price if actual_exit_price is not None else sl_target
-        pnl_pct = -1.5
-        pnl_usd = -(cap_base * RISK_PER_TRADE)
-        reason = "STOP LOSS (-1.5%)"
+        exit_p = actual_exit_price if (actual_exit_price is not None and actual_exit_price > 0) else sl_target
+        pnl_pct = ((exit_p - entry_p) / entry_p) * 100.0
+        pnl_usd = cap_base * (pnl_pct / 100.0)
+        reason = f"STOP LOSS ({pnl_pct:.2f}%)"
 
     closed_at = now_cot().isoformat()
 
-    if HAS_SUPABASE and supabase_client:
+    sb = get_supabase_client()
+    if sb is not None:
         try:
-            supabase_client.table("paper_trades").update({
+            sb.table("paper_trades").update({
                 "status": "CLOSED", "exit_price": exit_p, "pnl_usd": pnl_usd,
                 "pnl_pct": pnl_pct, "exit_reason": reason, "closed_at": closed_at
             }).eq("order_id", order_id).execute()
-        except Exception:
-            pass
+        except Exception as e:
+            logging.error(f"Error actualizando trade cerrado en Supabase: {e}")
 
     for item in _GLOBAL_TRADES_STORE:
         if item.get("order_id") == order_id:
@@ -976,18 +1035,21 @@ def close_active_trade(order_id: str, outcome: str, actual_exit_price: Optional[
         pass
 
     log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [ACTION] CIERRE REAL: {order_id} {sym} por {outcome} | PnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:,.2f} USD ({pnl_pct:+.2f}%)"
-    try:
-        if "logs" in st.session_state:
-            st.session_state.logs.insert(0, log_msg)
-    except Exception:
-        pass
+    add_system_log(log_msg)
 
     if outcome == "TP":
         enviar_notificacion_push(
             f"🎯 TAKE PROFIT: {sym}",
-            f"ID: {order_id}\nSalida: ${exit_p:,.4f}\nPnL: +${pnl_usd:,.2f} USD (+{pnl_pct:.2f}%)\n¡Objetivo cumplido!",
+            f"ID: {order_id}\nSalida: ${exit_p:,.4f}\nPnL: +${pnl_usd:,.2f} USD (+{pnl_pct:.2f}%)\n¡Objetivo cuantitativo cumplido!",
             priority="high",
             tags="tada,moneybag"
+        )
+    elif outcome == "BE":
+        enviar_notificacion_push(
+            f"🛡️ CIERRE BREAK-EVEN: {sym}",
+            f"ID: {order_id}\nSalida: ${exit_p:,.4f}\nPnL: +${pnl_usd:,.2f} USD (+{pnl_pct:.2f}%)\nCapital 100% protegido sin pérdidas.",
+            priority="default",
+            tags="shield,white_check_mark"
         )
     elif outcome == "SL":
         enviar_notificacion_push(
@@ -1019,7 +1081,7 @@ def execute_autonomous_scan_35_pairs():
             analysis = analyze_pair_confluence_4h(sym)
             if analysis.get("signal", False):
                 cur_p = float(analysis.get("price", 0.0))
-                if cur_p > 0:
+                if cur_p > 0.0:
                     trade_res = register_long_position(sym, cur_p, analysis)
                     if trade_res:
                         open_symbols.add(sym)
@@ -1031,7 +1093,7 @@ def execute_autonomous_scan_35_pairs():
     gc.collect()
 
 def monitor_and_auto_close_open_trades():
-    """Supervisa precios de Kraken Spot para ejecutar TP/SL en tiempo real."""
+    """Supervisa precios de Kraken Spot para ejecutar TP/SL en tiempo real protegiendo contra errores de conexión."""
     try:
         df_current = load_trades_data()
         if df_current.empty:
@@ -1047,14 +1109,22 @@ def monitor_and_auto_close_open_trades():
             entry_p = float(row.get('entry_price', 100.0))
             sl_p = float(row.get('sl', entry_p * (1.0 - STOP_LOSS_PCT)))
             tp_p = float(row.get('tp', entry_p * (1.0 + TAKE_PROFIT_PCT)))
+            is_be = bool(row.get('trailing_be', False))
+
             cur_p = get_current_asset_price(sym)
+            # PROTECCIÓN CRÍTICA: Si el precio es <= 0.0 por fallo transitorio de API, no ejecutar SL espurio
+            if cur_p <= 0.0:
+                continue
 
             if cur_p >= tp_p:
                 close_active_trade(oid, "TP", actual_exit_price=cur_p)
             elif cur_p <= sl_p:
-                close_active_trade(oid, "SL", actual_exit_price=cur_p)
-    except Exception:
-        pass
+                if is_be or sl_p >= entry_p:
+                    close_active_trade(oid, "BE", actual_exit_price=cur_p)
+                else:
+                    close_active_trade(oid, "SL", actual_exit_price=cur_p)
+    except Exception as e:
+        logging.error(f"Error monitoreando posiciones abiertas: {e}")
 
 # --------------------------------------------------------------------------------------
 # 10. HILO DEMONIO AUTÓNOMO INDESTRUCTIBLE (24/7 EN RENDER)
@@ -1149,6 +1219,8 @@ if not df_open.empty:
         sym_o = str(row.get('symbol'))
         entry_o = float(row.get('entry_price', 1.0))
         cur_p_o = get_current_asset_price(sym_o)
+        if cur_p_o <= 0.0:
+            cur_p_o = float(row.get('current_price', entry_o))
         f_pct = ((cur_p_o - entry_o) / entry_o) * 100.0
         f_usd = current_capital * (f_pct / 100.0)
         floating_pnl_usd += f_usd
@@ -1536,9 +1608,9 @@ with tab_auditoria:
     </div>
     """)
 
-    logs_list = st.session_state.get("logs", [])
+    logs_list = list(_GLOBAL_SYSTEM_LOGS) if _GLOBAL_SYSTEM_LOGS else st.session_state.get("logs", [])
     if logs_list:
-        logs_html_lines = "".join([f"<div class='log-line'>{log}</div>" for log in logs_list[:35]])
+        logs_html_lines = "".join([f"<div class='log-line'>{log}</div>" for log in logs_list[:40]])
         render_html(f"""
         <div class="terminal-console">
             {logs_html_lines}
