@@ -478,34 +478,22 @@ PAIRS: List[str] = [
     'AVAX/USD', 'DOT/USD', 'LINK/USD', 'LTC/USD', 'NEAR/USD', 
     'SUI/USD', 'APT/USD', 'UNI/USD', 'ICP/USD', 'FIL/USD', 
     'RENDER/USD', 'SHIB/USD', 'PEPE/USD', 'DOGE/USD', 'BCH/USD', 
-    'AAVE/USD', 'MATIC/USD', 'ATOM/USD', 'ALGO/USD', 'OP/USD', 
+    'AAVE/USD', 'POL/USD', 'ATOM/USD', 'ALGO/USD', 'OP/USD', 
     'ARB/USD', 'LDO/USD', 'TIA/USD', 'INJ/USD', 'FET/USD', 
     'SEI/USD', 'KAS/USD', 'STX/USD', 'GMX/USD', 'RUNE/USD'
 ]
 
-# Mapa para peticiones REST directas a Kraken
+# Mapa para peticiones REST directas a Kraken Spot (Símbolos oficiales Kraken)
 KRAKEN_PAIR_MAP: Dict[str, str] = {
-    'BTC/USD': 'XBTUSD', 'ETH/USD': 'ETHUSD', 'SOL/USD': 'SOLUSD', 'XRP/USD': 'XRPUSD',
+    'BTC/USD': 'XXBTZUSD', 'ETH/USD': 'XETHZUSD', 'SOL/USD': 'SOLUSD', 'XRP/USD': 'XXRPZUSD',
     'ADA/USD': 'ADAUSD', 'AVAX/USD': 'AVAXUSD', 'DOT/USD': 'DOTUSD', 'LINK/USD': 'LINKUSD',
-    'LTC/USD': 'LTCUSD', 'NEAR/USD': 'NEARUSD', 'SUI/USD': 'SUIUSD', 'APT/USD': 'APTUSD',
+    'LTC/USD': 'XLTCZUSD', 'NEAR/USD': 'NEARUSD', 'SUI/USD': 'SUIUSD', 'APT/USD': 'APTUSD',
     'UNI/USD': 'UNIUSD', 'ICP/USD': 'ICPUSD', 'FIL/USD': 'FILUSD', 'RENDER/USD': 'RENDERUSD',
     'SHIB/USD': 'SHIBUSD', 'PEPE/USD': 'PEPEUSD', 'DOGE/USD': 'XDGUSD', 'BCH/USD': 'BCHUSD',
-    'AAVE/USD': 'AAVEUSD', 'MATIC/USD': 'MATICUSD', 'ATOM/USD': 'ATOMUSD', 'ALGO/USD': 'ALGOUSD',
-    'OP/USD': 'OPUSD', 'ARB/USD': 'ARBUSD', 'LDO/USD': 'LDOUSD', 'TIA/USD': 'TIAUSD',
-    'INJ/USD': 'INJUSD', 'FET/USD': 'FETUSD', 'SEI/USD': 'SEIUSD', 'KAS/USD': 'KASUSD',
-    'STX/USD': 'STXUSD', 'GMX/USD': 'GMXUSD', 'RUNE/USD': 'RUNEUSD'
-}
-
-BASE_PRICES: Dict[str, float] = {
-    'BTC/USD': 68420.5, 'ETH/USD': 3510.2, 'SOL/USD': 178.6, 'XRP/USD': 0.584,
-    'ADA/USD': 0.421, 'AVAX/USD': 28.75, 'DOT/USD': 4.85, 'LINK/USD': 13.62,
-    'LTC/USD': 72.4, 'NEAR/USD': 5.22, 'SUI/USD': 2.14, 'APT/USD': 9.85,
-    'UNI/USD': 7.65, 'ICP/USD': 8.42, 'FIL/USD': 3.75, 'RENDER/USD': 5.92,
-    'SHIB/USD': 0.00001854, 'PEPE/USD': 0.00001048, 'DOGE/USD': 0.142, 'BCH/USD': 348.5,
-    'AAVE/USD': 156.4, 'MATIC/USD': 0.395, 'ATOM/USD': 4.85, 'ALGO/USD': 0.138,
-    'OP/USD': 1.62, 'ARB/USD': 0.592, 'LDO/USD': 1.18, 'TIA/USD': 5.85,
-    'INJ/USD': 21.4, 'FET/USD': 1.46, 'SEI/USD': 0.45, 'KAS/USD': 0.132,
-    'STX/USD': 1.85, 'GMX/USD': 24.5, 'RUNE/USD': 5.12
+    'AAVE/USD': 'AAVEUSD', 'POL/USD': 'POLUSD', 'MATIC/USD': 'POLUSD', 'ATOM/USD': 'ATOMUSD',
+    'ALGO/USD': 'ALGOUSD', 'OP/USD': 'OPUSD', 'ARB/USD': 'ARBUSD', 'LDO/USD': 'LDOUSD',
+    'TIA/USD': 'TIAUSD', 'INJ/USD': 'INJUSD', 'FET/USD': 'FETUSD', 'SEI/USD': 'SEIUSD',
+    'KAS/USD': 'KASUSD', 'STX/USD': 'STXUSD', 'GMX/USD': 'GMXUSD', 'RUNE/USD': 'RUNEUSD'
 }
 
 INITIAL_CAPITAL = 50.0         # Capital Base Real ($50.00 USD)
@@ -588,17 +576,21 @@ def enviar_notificacion_push(titulo: str, mensaje: str, priority: str = "default
 # --------------------------------------------------------------------------------------
 def analyze_pair_confluence_4h(symbol: str) -> Dict[str, Any]:
     """
-    Analiza un par solicitando EXCLUSIVAMENTE 210 velas en marco 4H (suficiente para EMA 200 y RSI 14).
-    Evalúa la triple regla de confluencia:
+    Analiza un par solicitando EXCLUSIVAMENTE 210 velas en marco 4H (interval=240, limit=210)
+    directamente desde CCXT o mediante la API REST pública de Kraken Spot.
+    
+    Triple regla de confluencia:
     1. Precio > EMA 200 (4H)
     2. RSI (14) en zona neutral/alcista [50.0 <= RSI <= 70.0]
     3. Volumen actual >= 1.5 * Media Móvil de Volumen 20 (SMA 20)
-    Libera inmediatamente la memoria con `del df` y Garbage Collector.
+    
+    Si un par falla al descargarse o no hay suficientes datos, retorna un diccionario
+    con ceros y señal False de forma limpia, sin romper el ciclo ni congelar datos.
     """
     df: Optional[pd.DataFrame] = None
     pair_k = KRAKEN_PAIR_MAP.get(symbol, symbol.replace('/', ''))
 
-    # Intento 1: CCXT con limit=210 estricto
+    # Intento 1: CCXT con limit=210 estricto en temporalidad 4h
     global exchange
     if exchange is not None:
         try:
@@ -609,16 +601,19 @@ def analyze_pair_confluence_4h(symbol: str) -> Dict[str, Any]:
             reconnect_kraken()
             df = None
 
-    # Intento 2: Kraken Public REST con interval=240 (4H)
+    # Intento 2: Kraken Public REST con interval=240 (4H) limitando a las últimas 210 velas
     if df is None or df.empty:
         try:
             url = f"https://api.kraken.com/0/public/OHLC?pair={pair_k}&interval=240"
-            req = urllib.request.Request(url, headers={"User-Agent": "DipperRenderLight/4.0"})
-            with urllib.request.urlopen(req, timeout=3) as resp:
+            req = urllib.request.Request(
+                url, 
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DipperRender/4.0"}
+            )
+            with urllib.request.urlopen(req, timeout=4) as resp:
                 data = json.loads(resp.read().decode())
                 res = data.get('result', {})
                 cand_key = [k for k in res.keys() if k != 'last']
-                if cand_key:
+                if cand_key and len(res[cand_key[0]]) >= 30:
                     raw_candles = res[cand_key[0]][-210:]
                     df = pd.DataFrame([
                         {'close': float(c[4]), 'volume': float(c[6])}
@@ -627,18 +622,35 @@ def analyze_pair_confluence_4h(symbol: str) -> Dict[str, Any]:
         except Exception:
             df = None
 
-    # Intento 3: Fallback sintetizado ligero en caso de desconexión
-    if df is None or df.empty:
-        base = BASE_PRICES.get(symbol, 100.0)
-        np.random.seed(abs(hash(symbol)) % 1000000)
-        returns = np.random.normal(0.0003, 0.003, 210)
-        prices = [base]
-        for r in returns[1:]:
-            prices.append(prices[-1] * (1 + r))
-        df = pd.DataFrame({
-            'close': prices,
-            'volume': np.random.uniform(50, 400, 210)
-        })
+    # Si la API no retorna datos suficientes, retornar estructura segura con ceros
+    if df is None or df.empty or len(df) < 15:
+        return {
+            "symbol": symbol,
+            "price": 0.0,
+            "ema200": 0.0,
+            "rsi": 50.0,
+            "vol_curr": 0.0,
+            "vol_ma20": 0.0,
+            "vol_ratio": 0.0,
+            "cond_ema": False,
+            "cond_rsi": False,
+            "cond_vol": False,
+            "signal": False
+        }
+
+    result = {
+        "symbol": symbol,
+        "price": 0.0,
+        "ema200": 0.0,
+        "rsi": 50.0,
+        "vol_curr": 0.0,
+        "vol_ma20": 0.0,
+        "vol_ratio": 0.0,
+        "cond_ema": False,
+        "cond_rsi": False,
+        "cond_vol": False,
+        "signal": False
+    }
 
     try:
         close_series = df['close']
@@ -647,7 +659,7 @@ def analyze_pair_confluence_4h(symbol: str) -> Dict[str, Any]:
         last_price = float(close_series.iloc[-1])
         vol_curr = float(volume_series.iloc[-1])
 
-        # 1. EMA 200
+        # 1. EMA 200 en marco de 4H
         span_calc = min(200, len(close_series))
         ema200_val = float(close_series.ewm(span=span_calc, adjust=False).mean().iloc[-1])
 
@@ -658,16 +670,16 @@ def analyze_pair_confluence_4h(symbol: str) -> Dict[str, Any]:
         rs = gain / (loss + 1e-9)
         rsi_val = float((100 - (100 / (1 + rs))).iloc[-1])
 
-        # 3. SMA 20 de volumen
+        # 3. Media Móvil de Volumen (SMA 20) y Ratio de Volumen
         vol_ma20 = float(volume_series.rolling(window=20, min_periods=1).mean().iloc[-1])
-        vol_ratio = float(vol_curr / (vol_ma20 + 1e-9))
+        vol_ratio = float(vol_curr / (vol_ma20 + 1e-9)) if vol_ma20 > 0 else 0.0
 
-        # Triple regla de confluencia
-        cond_ema = last_price > ema200_val
-        cond_rsi = 50.0 <= rsi_val <= 70.0
-        cond_vol = vol_curr >= (vol_ma20 * 1.5)
+        # Evaluación de la Triple Regla de Confluencia
+        cond_ema = bool(last_price > ema200_val)
+        cond_rsi = bool(50.0 <= rsi_val <= 70.0)
+        cond_vol = bool(vol_curr >= (vol_ma20 * 1.5))
 
-        signal_confluence = bool(cond_ema and cond_rsi and cond_vol)
+        signal_confluence = bool(cond_ema and cond_rsi and cond_vol and last_price > 0)
 
         result = {
             "symbol": symbol,
@@ -685,12 +697,12 @@ def analyze_pair_confluence_4h(symbol: str) -> Dict[str, Any]:
     except Exception:
         result = {
             "symbol": symbol,
-            "price": BASE_PRICES.get(symbol, 100.0),
-            "ema200": BASE_PRICES.get(symbol, 100.0),
+            "price": 0.0,
+            "ema200": 0.0,
             "rsi": 50.0,
-            "vol_curr": 100.0,
-            "vol_ma20": 100.0,
-            "vol_ratio": 1.0,
+            "vol_curr": 0.0,
+            "vol_ma20": 0.0,
+            "vol_ratio": 0.0,
             "cond_ema": False,
             "cond_rsi": False,
             "cond_vol": False,
@@ -704,7 +716,7 @@ def analyze_pair_confluence_4h(symbol: str) -> Dict[str, Any]:
     return result
 
 def get_current_asset_price(symbol: str) -> float:
-    """Obtiene cotización rápida sin retener memoria."""
+    """Obtiene cotización real en Kraken Spot sin retener memoria ni recurrir a precios sintéticos."""
     global exchange
     if exchange is not None:
         try:
@@ -717,7 +729,10 @@ def get_current_asset_price(symbol: str) -> float:
     pair_k = KRAKEN_PAIR_MAP.get(symbol, symbol.replace('/', ''))
     try:
         url = f"https://api.kraken.com/0/public/Ticker?pair={pair_k}"
-        req = urllib.request.Request(url, headers={"User-Agent": "DipperRenderLight/4.0"})
+        req = urllib.request.Request(
+            url, 
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) DipperRender/4.0"}
+        )
         with urllib.request.urlopen(req, timeout=3) as resp:
             data = json.loads(resp.read().decode())
             res = data.get('result', {})
@@ -727,7 +742,7 @@ def get_current_asset_price(symbol: str) -> float:
     except Exception:
         pass
 
-    return BASE_PRICES.get(symbol, 100.0)
+    return 0.0
 
 # --------------------------------------------------------------------------------------
 # 9. PERSISTENCIA EN SUPABASE & LEDGER REAL DE $50.00 USD
@@ -886,7 +901,9 @@ def execute_autonomous_scan_35_pairs():
         try:
             analysis = analyze_pair_confluence_4h(sym)
             if analysis.get("signal", False):
-                cur_p = analysis.get("price", BASE_PRICES.get(sym, 100.0))
+                cur_p = float(analysis.get("price", 0.0))
+                if cur_p <= 0:
+                    continue
                 closed_pnl = df_current[df_current['status'] == 'CLOSED']['pnl_usd'].sum() if not df_current.empty else 0.0
                 capital_real = INITIAL_CAPITAL + closed_pnl
                 riesgo_usd = capital_real * RISK_PER_TRADE
