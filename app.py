@@ -874,9 +874,11 @@ def register_long_position(sym: str, cur_p: float, analysis: Optional[Dict[str, 
         capital_real = INITIAL_CAPITAL + closed_pnl
         riesgo_usd = capital_real * RISK_PER_TRADE
 
-        # Matemática cuantitativa estricta: SL = execution_price * 0.985 (-1.5%) | TP = execution_price * 1.045 (+4.5%)
-        sl_price = execution_price * (1.0 - STOP_LOSS_PCT)
-        tp_price = execution_price * (1.0 + TAKE_PROFIT_PCT)
+        # Matemática cuantitativa estricta para posiciones LONG:
+        # Stop Loss: -1.5% ABAJO -> entry_price * (1 - 0.015) = entry_price * 0.985
+        # Take Profit: +4.5% ARRIBA -> entry_price * (1 + 0.045) = entry_price * 1.045
+        sl_price = round(execution_price * (1.0 - STOP_LOSS_PCT), 4)
+        tp_price = round(execution_price * (1.0 + TAKE_PROFIT_PCT), 4)
         order_id = f"DIP-{math.floor(100000 + (time.time() * 1000) % 900000)}"
         now_iso = now_cot().isoformat()
 
@@ -905,12 +907,12 @@ def register_long_position(sym: str, cur_p: float, analysis: Optional[Dict[str, 
         except Exception:
             pass
 
-        log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [LIVE EXEC] ¡ENTRADA EJECUTADA! Orden LONG en {sym} @ ${cur_p:,.4f} [Riesgo: ${riesgo_usd:,.2f} USD | TP: +4.5% | SL: -1.5%]"
+        log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [LIVE EXEC] ¡ENTRADA EJECUTADA! Orden LONG en {sym} @ ${execution_price:,.4f} [SL: ${sl_price:,.4f} (-1.5% ABAJO) | TP: ${tp_price:,.4f} (+4.5% ARRIBA) | Riesgo: ${riesgo_usd:,.2f} USD]"
         add_system_log(log_msg)
 
         enviar_notificacion_push(
             f"🟢 NUEVA ENTRADA LIVE: {sym} [LONG]",
-            f"ID: {order_id}\nEntrada: ${cur_p:,.4f}\nTP (+4.5%): ${tp_price:,.4f}\nSL (-1.5%): ${sl_price:,.4f}\nRiesgo: ${riesgo_usd:,.2f} USD\nConfluencia: Precio > EMA200 • RSI 50-70 • Vol >= 1.5x",
+            f"ID: {order_id}\nEntrada: ${execution_price:,.4f}\nTP (+4.5%): ${tp_price:,.4f}\nSL (-1.5%): ${sl_price:,.4f}\nRiesgo: ${riesgo_usd:,.2f} USD\nConfluencia: Precio > EMA200 • RSI 50-70 • Vol >= 1.5x",
             priority="high",
             tags="rocket,chart_with_upwards_trend"
         )
