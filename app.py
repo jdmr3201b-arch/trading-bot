@@ -24,7 +24,7 @@ Terminal de Trading Cuantitativo Institucional Calibrada para Micro-Servidores (
 - 5. STREAMLIT & AUTO-REFRESCO CADA 15 MINUTOS:
      * `st_autorefresh(interval=900000)` (15 minutos = 900,000 ms).
      * Reloj local interactivo (HTML+JS) sincronizado con el navegador del usuario.
-     * Arquitectura 100% READ-ONLY (sin botones de intervención manual).
+     * MODO LIVE / AUTÓNOMO EXEC: Ejecución autónoma 100% matemática y en tiempo real.
 ========================================================================================
 """
 
@@ -506,6 +506,10 @@ DAILY_CIRCUIT_BREAKER = -0.03  # -3.0% Circuit Breaker Diario
 MAX_SPREAD_TOLERANCE = 0.0015  # 0.15% Spread máximo permitido
 MAX_CONCURRENT_POSITIONS = 3   # Máximo 3 posiciones concurrentes
 
+# BANDERAS GLOBALES DE EJECUCIÓN (AUTÓNOMO EXEC / LIVE)
+READ_ONLY = False              # Desactivado modo lectura: Activada ejecución activa real (LIVE)
+MOCK_MODE = False              # Desactivado modo simulación: 100% órdenes reales y cuantificadas
+
 # --------------------------------------------------------------------------------------
 # 7. CONEXIÓN A KRAKEN, RECONEXIÓN & NOTIFICACIONES (NTFY / TELEGRAM)
 # --------------------------------------------------------------------------------------
@@ -745,37 +749,123 @@ def get_current_asset_price(symbol: str) -> float:
     return 0.0
 
 # --------------------------------------------------------------------------------------
-# 9. PERSISTENCIA EN SUPABASE & LEDGER REAL DE $50.00 USD
+# 9. PERSISTENCIA EN SUPABASE, MEMORIA Y REGISTRO DE TRADES EN VIVO
 # --------------------------------------------------------------------------------------
+_GLOBAL_TRADES_STORE: List[Dict[str, Any]] = []
+
 if "initialized" not in st.session_state:
     st.session_state.initialized = True
     st.session_state.logs = [
         f"[{now_cot().strftime('%H:%M:%S COT')}] [SYSTEM] Proyecto Dipper v4.0 inicializado con gestión de RAM < 200 MB.",
         f"[{now_cot().strftime('%H:%M:%S COT')}] [MONITOR] Universo ampliado a 35 criptoactivos en Kraken Spot (4H limit=210).",
-        f"[{now_cot().strftime('%H:%M:%S COT')}] [CAPITAL] Capital Base calibrado en $50.00 USD. Modo: 100% Read-Only Autónomo."
+        f"[{now_cot().strftime('%H:%M:%S COT')}] [CAPITAL] Capital Base calibrado en $50.00 USD. Modo: LIVE / AUTÓNOMO EXEC."
     ]
 
 def load_trades_data() -> pd.DataFrame:
     """Carga órdenes reales desde Supabase o estructura interna en memoria."""
+    global _GLOBAL_TRADES_STORE
     if HAS_SUPABASE and supabase_client:
         try:
             res = supabase_client.table("paper_trades").select("*").order("created_at", desc=True).execute()
-            if res.data and len(res.data) > 0:
+            if res.data is not None and len(res.data) > 0:
+                _GLOBAL_TRADES_STORE = list(res.data)
                 return pd.DataFrame(res.data)
         except Exception:
             pass
 
-    if "trades_cache" not in st.session_state:
-        st.session_state.trades_cache = pd.DataFrame(columns=[
+    if _GLOBAL_TRADES_STORE:
+        return pd.DataFrame(_GLOBAL_TRADES_STORE)
+
+    try:
+        if "trades_cache" not in st.session_state:
+            st.session_state.trades_cache = pd.DataFrame(columns=[
+                "order_id", "symbol", "side", "status", "entry_price", "exit_price",
+                "sl", "tp", "pnl_usd", "pnl_pct", "exit_reason", "trailing_be",
+                "created_at", "closed_at"
+            ])
+        return st.session_state.trades_cache
+    except Exception:
+        return pd.DataFrame(columns=[
             "order_id", "symbol", "side", "status", "entry_price", "exit_price",
             "sl", "tp", "pnl_usd", "pnl_pct", "exit_reason", "trailing_be",
             "created_at", "closed_at"
         ])
 
-    return st.session_state.trades_cache
+def register_long_position(sym: str, cur_p: float, analysis: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
+    """Registra una posición LONG activa en Supabase y en memoria si READ_ONLY es False y hay cupo (< 3)."""
+    global _GLOBAL_TRADES_STORE
+    if READ_ONLY:
+        return None
+
+    try:
+        df_current = load_trades_data()
+        open_trades = df_current[df_current['status'] == 'OPEN'] if not df_current.empty else pd.DataFrame()
+        open_count = len(open_trades)
+
+        if open_count >= MAX_CONCURRENT_POSITIONS:
+            return None
+
+        open_symbols = set(open_trades['symbol'].tolist()) if not open_trades.empty else set()
+        if sym in open_symbols:
+            return None
+
+        if cur_p <= 0:
+            return None
+
+        closed_pnl = df_current[df_current['status'] == 'CLOSED']['pnl_usd'].sum() if not df_current.empty else 0.0
+        capital_real = INITIAL_CAPITAL + closed_pnl
+        riesgo_usd = capital_real * RISK_PER_TRADE
+
+        sl_price = cur_p * (1.0 - STOP_LOSS_PCT)
+        tp_price = cur_p * (1.0 + TAKE_PROFIT_PCT)
+        order_id = f"DIP-{math.floor(100000 + (time.time() * 1000) % 900000)}"
+        now_iso = now_cot().isoformat()
+
+        new_trade = {
+            "order_id": order_id, "symbol": sym, "side": "LONG", "status": "OPEN",
+            "entry_price": cur_p, "exit_price": None, "sl": sl_price, "tp": tp_price,
+            "pnl_usd": 0.0, "pnl_pct": 0.0, "exit_reason": None, "trailing_be": False,
+            "created_at": now_iso, "closed_at": None
+        }
+
+        # 1. Persistencia en Supabase
+        if HAS_SUPABASE and supabase_client:
+            try:
+                supabase_client.table("paper_trades").insert(new_trade).execute()
+            except Exception as e:
+                logging.debug(f"Error insertando trade en Supabase: {e}")
+
+        # 2. Persistencia en memoria global compartida
+        _GLOBAL_TRADES_STORE.insert(0, new_trade)
+
+        # 3. Cache en sesión de Streamlit si está en contexto
+        try:
+            if "trades_cache" in st.session_state:
+                st.session_state.trades_cache = pd.concat([pd.DataFrame([new_trade]), st.session_state.trades_cache], ignore_index=True)
+        except Exception:
+            pass
+
+        log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [LIVE EXEC] ¡ENTRADA EJECUTADA! Orden LONG en {sym} @ ${cur_p:,.4f} [Riesgo: ${riesgo_usd:,.2f} USD | TP: +4.5% | SL: -1.5%]"
+        try:
+            if "logs" in st.session_state:
+                st.session_state.logs.insert(0, log_msg)
+        except Exception:
+            pass
+
+        enviar_notificacion_push(
+            f"🟢 NUEVA ENTRADA LIVE: {sym} [LONG]",
+            f"ID: {order_id}\nEntrada: ${cur_p:,.4f}\nTP (+4.5%): ${tp_price:,.4f}\nSL (-1.5%): ${sl_price:,.4f}\nRiesgo: ${riesgo_usd:,.2f} USD\nConfluencia: Precio > EMA200 • RSI 50-70 • Vol >= 1.5x",
+            priority="high",
+            tags="rocket,chart_with_upwards_trend"
+        )
+        return new_trade
+    except Exception as e:
+        logging.error(f"Error registrando posicion en {sym}: {e}")
+        return None
 
 def apply_trailing_stop_to_breakeven():
     """Mueve automáticamente el SL a Break-Even (+0.1%) al alcanzar +2.0% de ganancia flotante."""
+    global _GLOBAL_TRADES_STORE
     df = load_trades_data()
     if df.empty:
         return
@@ -792,9 +882,17 @@ def apply_trailing_stop_to_breakeven():
 
         if not trailing_done and pnl_float_pct >= (TRAILING_TRIGGER_PCT * 100.0):
             new_sl = entry_p * (1.0 + TRAILING_BE_PCT)
-            if "trades_cache" in st.session_state:
-                st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == oid, 'sl'] = new_sl
-                st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == oid, 'trailing_be'] = True
+            for item in _GLOBAL_TRADES_STORE:
+                if item.get("order_id") == oid:
+                    item["sl"] = new_sl
+                    item["trailing_be"] = True
+
+            try:
+                if "trades_cache" in st.session_state:
+                    st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == oid, 'sl'] = new_sl
+                    st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == oid, 'trailing_be'] = True
+            except Exception:
+                pass
 
             if HAS_SUPABASE and supabase_client:
                 try:
@@ -803,12 +901,16 @@ def apply_trailing_stop_to_breakeven():
                     pass
 
             msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [PROTECTION] Trailing a Break-Even en {sym} (+{pnl_float_pct:.2f}%). SL en ${new_sl:,.4f} (+0.1%)."
-            if "logs" in st.session_state:
-                st.session_state.logs.insert(0, msg)
+            try:
+                if "logs" in st.session_state:
+                    st.session_state.logs.insert(0, msg)
+            except Exception:
+                pass
             enviar_notificacion_push(f"🛡️ BREAK-EVEN: {sym}", f"Orden {oid} protegió entrada en ${new_sl:,.4f} (+0.1%).")
 
 def close_active_trade(order_id: str, outcome: str, actual_exit_price: Optional[float] = None):
     """Liquida una posición activa al tocar TP o SL con el precio real de Kraken."""
+    global _GLOBAL_TRADES_STORE
     df_current = load_trades_data()
     if df_current.empty:
         return
@@ -853,17 +955,32 @@ def close_active_trade(order_id: str, outcome: str, actual_exit_price: Optional[
         except Exception:
             pass
 
-    if "trades_cache" in st.session_state:
-        st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == order_id, 'status'] = 'CLOSED'
-        st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == order_id, 'exit_price'] = exit_p
-        st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == order_id, 'pnl_usd'] = pnl_usd
-        st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == order_id, 'pnl_pct'] = pnl_pct
-        st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == order_id, 'exit_reason'] = reason
-        st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == order_id, 'closed_at'] = closed_at
+    for item in _GLOBAL_TRADES_STORE:
+        if item.get("order_id") == order_id:
+            item["status"] = "CLOSED"
+            item["exit_price"] = exit_p
+            item["pnl_usd"] = pnl_usd
+            item["pnl_pct"] = pnl_pct
+            item["exit_reason"] = reason
+            item["closed_at"] = closed_at
+
+    try:
+        if "trades_cache" in st.session_state:
+            st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == order_id, 'status'] = 'CLOSED'
+            st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == order_id, 'exit_price'] = exit_p
+            st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == order_id, 'pnl_usd'] = pnl_usd
+            st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == order_id, 'pnl_pct'] = pnl_pct
+            st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == order_id, 'exit_reason'] = reason
+            st.session_state.trades_cache.loc[st.session_state.trades_cache['order_id'] == order_id, 'closed_at'] = closed_at
+    except Exception:
+        pass
 
     log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [ACTION] CIERRE REAL: {order_id} {sym} por {outcome} | PnL: {'+' if pnl_usd >= 0 else ''}${pnl_usd:,.2f} USD ({pnl_pct:+.2f}%)"
-    if "logs" in st.session_state:
-        st.session_state.logs.insert(0, log_msg)
+    try:
+        if "logs" in st.session_state:
+            st.session_state.logs.insert(0, log_msg)
+    except Exception:
+        pass
 
     if outcome == "TP":
         enviar_notificacion_push(
@@ -902,46 +1019,11 @@ def execute_autonomous_scan_35_pairs():
             analysis = analyze_pair_confluence_4h(sym)
             if analysis.get("signal", False):
                 cur_p = float(analysis.get("price", 0.0))
-                if cur_p <= 0:
-                    continue
-                closed_pnl = df_current[df_current['status'] == 'CLOSED']['pnl_usd'].sum() if not df_current.empty else 0.0
-                capital_real = INITIAL_CAPITAL + closed_pnl
-                riesgo_usd = capital_real * RISK_PER_TRADE
-
-                sl_price = cur_p * (1.0 - STOP_LOSS_PCT)
-                tp_price = cur_p * (1.0 + TAKE_PROFIT_PCT)
-                order_id = f"DIP-{math.floor(100000 + (time.time() * 1000) % 900000)}"
-                now_iso = now_cot().isoformat()
-
-                new_trade = {
-                    "order_id": order_id, "symbol": sym, "side": "LONG", "status": "OPEN",
-                    "entry_price": cur_p, "exit_price": None, "sl": sl_price, "tp": tp_price,
-                    "pnl_usd": 0.0, "pnl_pct": 0.0, "exit_reason": None, "trailing_be": False,
-                    "created_at": now_iso, "closed_at": None
-                }
-
-                if HAS_SUPABASE and supabase_client:
-                    try:
-                        supabase_client.table("paper_trades").insert(new_trade).execute()
-                    except Exception:
-                        pass
-
-                if "trades_cache" in st.session_state:
-                    st.session_state.trades_cache = pd.concat([pd.DataFrame([new_trade]), st.session_state.trades_cache], ignore_index=True)
-
-                open_symbols.add(sym)
-                slots_left -= 1
-
-                log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [AUTO-TRADE] ¡CONFLUENCIA DETECTADA! Orden LONG en {sym} @ ${cur_p:,.4f} [Riesgo: ${riesgo_usd:,.2f} USD | TP: +4.5% | SL: -1.5%]"
-                if "logs" in st.session_state:
-                    st.session_state.logs.insert(0, log_msg)
-
-                enviar_notificacion_push(
-                    f"🟢 NUEVA ENTRADA 4H: {sym} [LONG]",
-                    f"ID: {order_id}\nEntrada: ${cur_p:,.4f}\nTP (+4.5%): ${tp_price:,.4f}\nSL (-1.5%): ${sl_price:,.4f}\nRiesgo: ${riesgo_usd:,.2f} USD\nConfluencia: Precio > EMA200 • RSI 50-70 • Vol >= 1.5x",
-                    priority="high",
-                    tags="rocket,chart_with_upwards_trend"
-                )
+                if cur_p > 0:
+                    trade_res = register_long_position(sym, cur_p, analysis)
+                    if trade_res:
+                        open_symbols.add(sym)
+                        slots_left -= 1
         except Exception:
             pass
 
@@ -1103,8 +1185,12 @@ with col_h_brand:
                 <div class="status-badge" style="color: {'#10b981' if not circuit_breaker_active else '#f43f5e'};">
                     <span>CIRCUIT BREAKER: {'NORMAL' if not circuit_breaker_active else 'DISPARADO'}</span>
                 </div>
-                <div class="status-badge" style="color: #f59e0b; border-color: rgba(245, 158, 11, 0.3);">
-                    <span>READ-ONLY</span>
+                <div class="status-badge" style="color: {'#10b981' if not READ_ONLY else '#f59e0b'}; border-color: {'rgba(16, 185, 129, 0.4)' if not READ_ONLY else 'rgba(245, 158, 11, 0.3)'}; background: {'rgba(16, 185, 129, 0.1)' if not READ_ONLY else 'transparent'};">
+                    <div class="pulse-dot" style="background: {'#10b981' if not READ_ONLY else '#f59e0b'};"></div>
+                    <span>{'AUTÓNOMO EXEC' if not READ_ONLY else 'READ-ONLY'}</span>
+                </div>
+                <div class="status-badge" style="color: {'#38bdf8' if not READ_ONLY else '#94a3b8'}; border-color: {'rgba(56, 189, 248, 0.35)' if not READ_ONLY else 'rgba(148, 163, 184, 0.3)'}; font-weight: 700;">
+                    <span>MODO: {'LIVE' if not READ_ONLY else 'AUDIT'}</span>
                 </div>
             </div>
         </div>
@@ -1235,18 +1321,43 @@ tab_matriz, tab_auditoria = st.tabs([
 # PESTAÑA 1: 📊 MATRIZ CUANTITATIVA EN VIVO & POSICIONES ABIERTAS
 # ======================================================================================
 with tab_matriz:
-    # SECCIÓN A: POSICIONES ABIERTAS
-    render_html("""
+    # 1. Escaneo cuantitativo de los 35 pares con limit=210 y registro en vivo
+    matrix_rows = []
+    signals_count = 0
+    scanned_pairs_data = []
+
+    for sym in PAIRS:
+        data_pair = analyze_pair_confluence_4h(sym)
+        is_signal = data_pair.get("signal", False)
+        price_val = data_pair.get("price", 0.0)
+
+        if is_signal:
+            signals_count += 1
+            # Si READ_ONLY es False y no hay Circuit Breaker, registrar posición automáticamente si hay cupo (< 3)
+            if not READ_ONLY and not circuit_breaker_active and price_val > 0:
+                register_long_position(sym, price_val, data_pair)
+
+        scanned_pairs_data.append((sym, data_pair))
+
+    # Purga de memoria tras escanear los 35 pares
+    gc.collect()
+
+    # Recargar datos de posiciones abiertas actualizadas en tiempo real
+    df_open_fresh = load_trades_data()
+    df_open_fresh = df_open_fresh[df_open_fresh['status'] == 'OPEN'].copy() if not df_open_fresh.empty else pd.DataFrame()
+
+    # SECCIÓN A: POSICIONES ABIERTAS EN CARTERA
+    render_html(f"""
     <div class="section-header">
         <div class="section-title">
             <span style="color: #38bdf8;">💼</span>
-            <span>Posiciones Activas en Cartera (Máximo 3 Concurrentes)</span>
+            <span>Posiciones Activas en Cartera (Máximo {MAX_CONCURRENT_POSITIONS} Concurrentes)</span>
         </div>
-        <div class="section-tag">GESTIÓN AUTÓNOMA 100% READ-ONLY</div>
+        <div class="section-tag">{'GESTIÓN AUTÓNOMA LIVE EXEC' if not READ_ONLY else 'GESTIÓN AUTÓNOMA 100% READ-ONLY'}</div>
     </div>
     """)
 
-    if df_open.empty:
+    if df_open_fresh.empty:
         render_html("""
         <div style="background-color: #080d14; border: 1px dashed rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 20px; text-align: center; color: #64748b; font-size: 11px; font-family: 'JetBrains Mono'; margin-bottom: 22px;">
             SIN POSICIONES ACTIVAS. EL MOTOR DE 35 PARES VIGILA EL MERCADO CONTINUAMENTE.
@@ -1254,7 +1365,7 @@ with tab_matriz:
         """)
     else:
         rows_open = []
-        for _, row in df_open.iterrows():
+        for _, row in df_open_fresh.iterrows():
             oid = str(row.get('order_id', '-'))
             sym = str(row.get('symbol', '-'))
             entry_p = float(row.get('entry_price', 1.0))
@@ -1305,16 +1416,8 @@ with tab_matriz:
     </div>
     """)
 
-    # Análisis iterativo con limit=210 y purga periódica de memoria
-    matrix_rows = []
-    signals_count = 0
-
-    for sym in PAIRS:
-        data_pair = analyze_pair_confluence_4h(sym)
+    for sym, data_pair in scanned_pairs_data:
         is_signal = data_pair.get("signal", False)
-        if is_signal:
-            signals_count += 1
-
         price_val = data_pair.get("price", 0.0)
         ema_val = data_pair.get("ema200", 0.0)
         rsi_val = data_pair.get("rsi", 50.0)
@@ -1341,7 +1444,7 @@ with tab_matriz:
             f"</tr>"
         )
 
-    # Purga de Garbage Collector tras escanear los 35 pares
+    # Purga final de Garbage Collector tras construir la tabla
     gc.collect()
 
     table_matrix_html = (
