@@ -809,6 +809,40 @@ if "initialized" not in st.session_state:
     st.session_state.initialized = True
     st.session_state.logs = list(_GLOBAL_SYSTEM_LOGS)
 
+def _sanitize_trade_levels(trade: Dict[str, Any]) -> Dict[str, Any]:
+    """Corrige automáticamente posiciones con SL o TP invertidos si fueron registradas con el bug."""
+    try:
+        side = trade.get("side", "LONG")
+        entry_p = float(trade.get("entry_price", 0.0))
+        if side == "LONG" and entry_p > 0:
+            sl = float(trade.get("sl", 0.0))
+            tp = float(trade.get("tp", 0.0))
+            trailing_be = bool(trade.get("trailing_be", False))
+            needs_fix = False
+
+            # Para LONG: SL DEBE ser menor que la entrada (a menos que ya esté en Break-Even +0.1%)
+            # Si sl > entrada * 1.005 o tp < entrada, los niveles están invertidos al revés
+            if (sl > entry_p * 1.005) or sl <= 0.0:
+                trade["sl"] = round(entry_p * (1.0 - STOP_LOSS_PCT), 4)
+                needs_fix = True
+            if (tp < entry_p) or tp <= 0.0:
+                trade["tp"] = round(entry_p * (1.0 + TAKE_PROFIT_PCT), 4)
+                needs_fix = True
+
+            if needs_fix and trade.get("status") == "OPEN":
+                sb = get_supabase_client()
+                if sb is not None and "order_id" in trade:
+                    try:
+                        sb.table("paper_trades").update({
+                            "sl": trade["sl"],
+                            "tp": trade["tp"]
+                        }).eq("order_id", trade["order_id"]).execute()
+                    except Exception:
+                        pass
+    except Exception:
+        pass
+    return trade
+
 def load_trades_data() -> pd.DataFrame:
     """Carga órdenes reales desde Supabase o estructura interna en memoria de forma resiliente."""
     global _GLOBAL_TRADES_STORE
@@ -817,9 +851,10 @@ def load_trades_data() -> pd.DataFrame:
         try:
             res = sb.table("paper_trades").select("*").order("created_at", desc=True).execute()
             if res.data is not None:
-                _GLOBAL_TRADES_STORE = list(res.data)
-                if len(res.data) > 0:
-                    return pd.DataFrame(res.data)
+                sanitized_data = [_sanitize_trade_levels(dict(d)) for d in res.data]
+                _GLOBAL_TRADES_STORE = list(sanitized_data)
+                if len(sanitized_data) > 0:
+                    return pd.DataFrame(sanitized_data)
                 return pd.DataFrame(columns=[
                     "order_id", "symbol", "side", "status", "entry_price", "exit_price",
                     "sl", "tp", "pnl_usd", "pnl_pct", "exit_reason", "trailing_be",
@@ -829,6 +864,7 @@ def load_trades_data() -> pd.DataFrame:
             logging.error(f"Fallo al sincronizar trades con Supabase: {e}")
 
     if _GLOBAL_TRADES_STORE:
+        _GLOBAL_TRADES_STORE = [_sanitize_trade_levels(dict(d)) for d in _GLOBAL_TRADES_STORE]
         return pd.DataFrame(_GLOBAL_TRADES_STORE)
 
     try:
