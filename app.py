@@ -508,10 +508,11 @@ KRAKEN_PAIR_MAP: Dict[str, str] = {
 
 INITIAL_CAPITAL = 50.0         # Capital Base Real ($50.00 USD)
 RISK_PER_TRADE = 0.015         # 1.5% de riesgo exacto por trade ($0.75 USD base)
-STOP_LOSS_PCT = 0.015          # -1.5% Stop Loss
-TAKE_PROFIT_PCT = 0.045        # +4.5% Take Profit (Ratio 1:3 Asimétrico)
-TRAILING_TRIGGER_PCT = 0.020   # +2.0% flotante para mover SL a Break-Even
+STOP_LOSS_PCT = 0.025          # -2.5% Stop Loss ajustado contra ruido
+TAKE_PROFIT_PCT = 0.05         # +5.0% Take Profit (Ratio 1:2 Óptimo)
+TRAILING_TRIGGER_PCT = 0.025   # +2.5% flotante para mover SL a Break-Even
 TRAILING_BE_PCT = 0.001        # +0.1% sobre entrada (cubre fees)
+STOP_LOSS_COOLDOWN_HOURS = 4   # 4 horas de cooldown tras cierre en Stop Loss
 DAILY_CIRCUIT_BREAKER = -0.03  # -3.0% Circuit Breaker Diario
 MAX_SPREAD_TOLERANCE = 0.0015  # 0.15% Spread máximo permitido
 MAX_CONCURRENT_POSITIONS = 3   # Máximo 3 posiciones concurrentes
@@ -882,14 +883,55 @@ def load_trades_data() -> pd.DataFrame:
             "created_at", "closed_at"
         ])
 
+def is_btc_market_bullish() -> bool:
+    """Filtro de Tendencia Global BTC/USD: retorna True si BTC está por encima de su EMA 200 en 4H."""
+    try:
+        btc_analysis = analyze_pair_confluence_4h("BTC/USD")
+        p = btc_analysis.get("price", 0.0)
+        ema = btc_analysis.get("ema200", 0.0)
+        if p > 0 and ema > 0:
+            return p > ema
+    except Exception:
+        pass
+    return True
+
+def check_stop_loss_cooldown(df_current: pd.DataFrame, sym: str) -> bool:
+    """Verifica si el par está en cooldown de 4 horas tras haber cerrado por Stop Loss."""
+    if df_current.empty:
+        return False
+    closed_df = df_current[(df_current['symbol'] == sym) & (df_current['status'] == 'CLOSED')]
+    if closed_df.empty:
+        return False
+    for _, row in closed_df.iterrows():
+        reason = str(row.get('exit_reason', ''))
+        if "STOP LOSS" in reason.upper():
+            closed_str = str(row.get('closed_at', row.get('created_at', '')))
+            try:
+                dt_closed = datetime.datetime.fromisoformat(closed_str.replace("Z", "+00:00")).astimezone(TZ_COT)
+                hours_elapsed = (now_cot() - dt_closed).total_seconds() / 3600.0
+                if hours_elapsed < STOP_LOSS_COOLDOWN_HOURS:
+                    return True
+            except Exception:
+                pass
+    return False
+
 def register_long_position(sym: str, cur_p: float, analysis: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
-    """Registra una posición LONG activa en Supabase y en memoria si READ_ONLY es False y hay cupo (< 3)."""
+    """Registra una posición LONG activa si BTC es alcista, no hay cooldown por SL y hay cupo (< 3)."""
     global _GLOBAL_TRADES_STORE
     if READ_ONLY:
         return None
 
     try:
         df_current = load_trades_data()
+
+        # 1. Filtro Global de Tendencia BTC/USD
+        if not is_btc_market_bullish():
+            return None
+
+        # 2. Cooldown de 4h tras Stop Loss en este par
+        if check_stop_loss_cooldown(df_current, sym):
+            return None
+
         open_trades = df_current[df_current['status'] == 'OPEN'] if not df_current.empty else pd.DataFrame()
         open_count = len(open_trades)
 
@@ -911,8 +953,8 @@ def register_long_position(sym: str, cur_p: float, analysis: Optional[Dict[str, 
         riesgo_usd = capital_real * RISK_PER_TRADE
 
         # Matemática cuantitativa estricta para posiciones LONG:
-        # Stop Loss: -1.5% ABAJO -> entry_price * (1 - 0.015) = entry_price * 0.985
-        # Take Profit: +4.5% ARRIBA -> entry_price * (1 + 0.045) = entry_price * 1.045
+        # Stop Loss: -2.5% ABAJO
+        # Take Profit: +5.0% ARRIBA (Ratio 1:2)
         sl_price = round(execution_price * (1.0 - STOP_LOSS_PCT), 4)
         tp_price = round(execution_price * (1.0 + TAKE_PROFIT_PCT), 4)
         order_id = f"DIP-{math.floor(100000 + (time.time() * 1000) % 900000)}"
@@ -943,12 +985,12 @@ def register_long_position(sym: str, cur_p: float, analysis: Optional[Dict[str, 
         except Exception:
             pass
 
-        log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [LIVE EXEC] ¡ENTRADA EJECUTADA! Orden LONG en {sym} @ ${execution_price:,.4f} [SL: ${sl_price:,.4f} (-1.5% ABAJO) | TP: ${tp_price:,.4f} (+4.5% ARRIBA) | Riesgo: ${riesgo_usd:,.2f} USD]"
+        log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [LIVE EXEC] ¡ENTRADA EJECUTADA! Orden LONG en {sym} @ ${execution_price:,.4f} [SL: ${sl_price:,.4f} (-2.5%) | TP: ${tp_price:,.4f} (+5.0%) | Riesgo: ${riesgo_usd:,.2f} USD]"
         add_system_log(log_msg)
 
         enviar_notificacion_push(
             f"🟢 NUEVA ENTRADA LIVE: {sym} [LONG]",
-            f"ID: {order_id}\nEntrada: ${execution_price:,.4f}\nTP (+4.5%): ${tp_price:,.4f}\nSL (-1.5%): ${sl_price:,.4f}\nRiesgo: ${riesgo_usd:,.2f} USD\nConfluencia: Precio > EMA200 • RSI 50-70 • Vol >= 1.5x",
+            f"ID: {order_id}\nEntrada: ${execution_price:,.4f}\nTP (+5.0%): ${tp_price:,.4f}\nSL (-2.5%): ${sl_price:,.4f}\nRiesgo: ${riesgo_usd:,.2f} USD\nFiltro BTC Alcista & Cooldown OK",
             priority="high",
             tags="rocket,chart_with_upwards_trend"
         )
@@ -1100,6 +1142,11 @@ def close_active_trade(order_id: str, outcome: str, actual_exit_price: Optional[
 def execute_autonomous_scan_35_pairs():
     """Escanea los 35 pares con limit=210 y purga la memoria con gc.collect()."""
     df_current = load_trades_data()
+
+    # 1. Filtro Global de Tendencia BTC/USD
+    if not is_btc_market_bullish():
+        return
+
     open_trades = df_current[df_current['status'] == 'OPEN'] if not df_current.empty else pd.DataFrame()
     open_count = len(open_trades)
 
@@ -1113,6 +1160,9 @@ def execute_autonomous_scan_35_pairs():
         if slots_left <= 0:
             break
         if sym in open_symbols:
+            continue
+        # Cooldown de 4h tras Stop Loss
+        if check_stop_loss_cooldown(df_current, sym):
             continue
 
         try:
