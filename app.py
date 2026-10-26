@@ -483,39 +483,29 @@ supabase_client = get_supabase_client()
 # --------------------------------------------------------------------------------------
 # 6. UNIVERSO EXPANDIDO: 35 ACTIVOS LÍQUIDOS EN KRAKEN SPOT
 # --------------------------------------------------------------------------------------
+# LISTA BLANCA EXCLUSIVA: TOP 3 ACTIVOS DE MÁXIMA LIQUIDEZ KRAKEN SPOT
+# --------------------------------------------------------------------------------------
 PAIRS: List[str] = [
-    'BTC/USD', 'ETH/USD', 'SOL/USD', 'XRP/USD', 'ADA/USD', 
-    'AVAX/USD', 'DOT/USD', 'LINK/USD', 'LTC/USD', 'NEAR/USD', 
-    'SUI/USD', 'APT/USD', 'UNI/USD', 'ICP/USD', 'FIL/USD', 
-    'RENDER/USD', 'SHIB/USD', 'PEPE/USD', 'DOGE/USD', 'BCH/USD', 
-    'AAVE/USD', 'POL/USD', 'ATOM/USD', 'ALGO/USD', 'OP/USD', 
-    'ARB/USD', 'LDO/USD', 'TIA/USD', 'INJ/USD', 'FET/USD', 
-    'SEI/USD', 'KAS/USD', 'STX/USD', 'GMX/USD', 'RUNE/USD'
+    'BTC/USD', 'ETH/USD', 'SOL/USD'
 ]
 
-# Mapa para peticiones REST directas a Kraken Spot (Símbolos oficiales Kraken)
+# Mapa oficial Kraken Spot para BTC, ETH y SOL
 KRAKEN_PAIR_MAP: Dict[str, str] = {
-    'BTC/USD': 'XXBTZUSD', 'ETH/USD': 'XETHZUSD', 'SOL/USD': 'SOLUSD', 'XRP/USD': 'XXRPZUSD',
-    'ADA/USD': 'ADAUSD', 'AVAX/USD': 'AVAXUSD', 'DOT/USD': 'DOTUSD', 'LINK/USD': 'LINKUSD',
-    'LTC/USD': 'XLTCZUSD', 'NEAR/USD': 'NEARUSD', 'SUI/USD': 'SUIUSD', 'APT/USD': 'APTUSD',
-    'UNI/USD': 'UNIUSD', 'ICP/USD': 'ICPUSD', 'FIL/USD': 'FILUSD', 'RENDER/USD': 'RENDERUSD',
-    'SHIB/USD': 'SHIBUSD', 'PEPE/USD': 'PEPEUSD', 'DOGE/USD': 'XDGUSD', 'BCH/USD': 'BCHUSD',
-    'AAVE/USD': 'AAVEUSD', 'POL/USD': 'POLUSD', 'MATIC/USD': 'POLUSD', 'ATOM/USD': 'ATOMUSD',
-    'ALGO/USD': 'ALGOUSD', 'OP/USD': 'OPUSD', 'ARB/USD': 'ARBUSD', 'LDO/USD': 'LDOUSD',
-    'TIA/USD': 'TIAUSD', 'INJ/USD': 'INJUSD', 'FET/USD': 'FETUSD', 'SEI/USD': 'SEIUSD',
-    'KAS/USD': 'KASUSD', 'STX/USD': 'STXUSD', 'GMX/USD': 'GMXUSD', 'RUNE/USD': 'RUNEUSD'
+    'BTC/USD': 'XXBTZUSD',
+    'ETH/USD': 'XETHZUSD',
+    'SOL/USD': 'SOLUSD'
 }
 
-INITIAL_CAPITAL = 50.0         # Capital Base Real ($50.00 USD)
-RISK_PER_TRADE = 0.015         # 1.5% de riesgo exacto por trade ($0.75 USD base)
-STOP_LOSS_PCT = 0.025          # -2.5% Stop Loss ajustado contra ruido
-TAKE_PROFIT_PCT = 0.05         # +5.0% Take Profit (Ratio 1:2 Óptimo)
-TRAILING_TRIGGER_PCT = 0.025   # +2.5% flotante para mover SL a Break-Even
-TRAILING_BE_PCT = 0.001        # +0.1% sobre entrada (cubre fees)
+INITIAL_CAPITAL = 39.96        # Capital Base Real inicial limpio ($39.96 USD)
+RISK_PER_TRADE = 0.015         # 1.5% de riesgo exacto por trade
+STOP_LOSS_PCT = 0.015          # -1.5% Stop Loss Rígido
+TAKE_PROFIT_PCT = 0.05         # +5.0% Take Profit Final
+TRAILING_TRIGGER_PCT = 0.020   # +2.0% Take Profit Parcial (50%) y Break-Even (50% restante)
+TRAILING_BE_PCT = 0.001        # +0.1% sobre entrada para el remanente (cubre comisiones)
 STOP_LOSS_COOLDOWN_HOURS = 4   # 4 horas de cooldown tras cierre en Stop Loss
 DAILY_CIRCUIT_BREAKER = -0.03  # -3.0% Circuit Breaker Diario
 MAX_SPREAD_TOLERANCE = 0.0015  # 0.15% Spread máximo permitido
-MAX_CONCURRENT_POSITIONS = 3   # Máximo 3 posiciones concurrentes
+MAX_CONCURRENT_POSITIONS = 3   # Máximo 3 posiciones concurrentes (1 por activo)
 
 # BANDERAS GLOBALES DE EJECUCIÓN (AUTÓNOMO EXEC / LIVE)
 READ_ONLY = False              # Desactivado modo lectura: Activada ejecución activa real (LIVE)
@@ -1177,6 +1167,9 @@ def execute_autonomous_scan_35_pairs():
         except Exception:
             pass
 
+        # Pequeña pausa de cortesía para proteger contra Kraken Rate Limits
+        time.sleep(0.3)
+
     # Purga final del ciclo de escaneo
     gc.collect()
 
@@ -1220,13 +1213,11 @@ def monitor_and_auto_close_open_trades():
 _GLOBAL_DAEMON_INITIALIZED = False
 
 def run_autonomous_trading_daemon():
-    """Bucle autónomo que supervisa posiciones cada 15s y escanea los 35 pares cada 15m."""
-    last_scan_time = 0
+    """Bucle autónomo continuo optimizado cada 60 segundos (sin esperas de 15 minutos)."""
     circuit_breaker_alerted_date = None
 
     while True:
         try:
-            now_epoch = time.time()
             now_dt = now_cot()
             today_str = now_dt.strftime("%Y-%m-%d")
 
@@ -1255,26 +1246,23 @@ def run_autonomous_trading_daemon():
             except Exception:
                 pass
 
-            # 3. Escaneo de los 35 pares cada 15 minutos (900s)
-            if (now_epoch - last_scan_time) >= 900:
+            # 3. Escaneo continuo de confluencia en los 35 pares
+            try:
+                execute_autonomous_scan_35_pairs()
+            except Exception:
                 try:
+                    reconnect_kraken()
                     execute_autonomous_scan_35_pairs()
-                    last_scan_time = now_epoch
                 except Exception:
-                    time.sleep(5)
-                    try:
-                        reconnect_kraken()
-                        execute_autonomous_scan_35_pairs()
-                        last_scan_time = now_epoch
-                    except Exception:
-                        last_scan_time = now_epoch
-                finally:
-                    gc.collect()
+                    pass
+            finally:
+                gc.collect()
 
         except Exception:
-            time.sleep(3)
+            time.sleep(5)
 
-        time.sleep(15)
+        # Ciclo optimizado continuo cada 60 segundos para mantener Render 24/7 sin saturar rate limits
+        time.sleep(60)
 
 def start_indestructible_daemon():
     """Inicia el hilo global de fondo en Render."""
