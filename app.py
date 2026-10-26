@@ -19,10 +19,6 @@ Terminal de Trading Cuantitativo Institucional Calibrada para Micro-Servidores (
 - 4. RESILIENCIA Y MANEJO DE ERRORES:
      * Cada petición envuelta en try-except individual para proteger el escáner continuo.
      * Auto-reconexión a Kraken y Health Check HTTP en puerto $PORT (200 OK) para Render.
-- 5. STREAMLIT & AUTO-REFRESCO CADA 15 MINUTOS:
-     * `st_autorefresh(interval=900000)` (15 minutos = 900,000 ms).
-     * Reloj local interactivo (HTML+JS) sincronizado con el navegador del usuario.
-     * MODO LIVE / AUTÓNOMO EXEC: Ejecución autónoma 100% matemática y en tiempo real.
 ========================================================================================
 """
 
@@ -484,7 +480,7 @@ KRAKEN_PAIR_MAP: Dict[str, str] = {
     'SOL/USD': 'SOLUSD'
 }
 
-INITIAL_CAPITAL = 39.96        # Capital Base Real inicial limpio ($39.96 USD)
+INITIAL_CAPITAL = 50.00        # Capital Base Real inicial limpio ($50.00 USD)
 RISK_PER_TRADE = 0.015         # 1.5% de riesgo exacto por trade
 STOP_LOSS_PCT = 0.015          # -1.5% Stop Loss Rígido
 TAKE_PROFIT_PCT = 0.020        # +2.0% Take Profit / Objetivo Parcial
@@ -712,7 +708,7 @@ _GLOBAL_TRADES_STORE: List[Dict[str, Any]] = []
 _GLOBAL_SYSTEM_LOGS: List[str] = [
     f"[{now_cot().strftime('%H:%M:%S COT')}] [SYSTEM] Proyecto Dipper v4.0 (VIP 3 Pairs) inicializado.",
     f"[{now_cot().strftime('%H:%M:%S COT')}] [MONITOR] Universo restringido: BTC/USD, ETH/USD, SOL/USD.",
-    f"[{now_cot().strftime('%H:%M:%S COT')}] [CAPITAL] Capital Base calibrado en $39.96 USD. Modo: LIVE / AUTÓNOMO."
+    f"[{now_cot().strftime('%H:%M:%S COT')}] [CAPITAL] Capital Base calibrado en $50.00 USD. Modo: LIVE / AUTÓNOMO."
 ]
 
 def add_system_log(msg: str):
@@ -1036,7 +1032,7 @@ if not _GLOBAL_DAEMON_INITIALIZED:
     threading.Thread(target=run_autonomous_trading_daemon, daemon=True, name="DipperDaemonVIP").start()
 
 # --------------------------------------------------------------------------------------
-# 10. INTERFAZ STREAMLIT & MÉTRICAS
+# 10. INTERFAZ STREAMLIT & MÉTRICAS (RESTAURANDO LAS 2 PESTAÑAS)
 # --------------------------------------------------------------------------------------
 df_all = load_trades_data()
 df_open = df_all[df_all["status"] == "OPEN"].copy() if not df_all.empty else pd.DataFrame()
@@ -1080,7 +1076,7 @@ with col_h_brand:
             </div>
             <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
                 <div class="status-badge" style="color: #10b981;"><div class="pulse-dot"></div><span>MOTOR: LIVE AUTÓNOMO</span></div>
-                <div class="status-badge" style="color: #38bdf8;"><span>CAPITAL BASE: $39.96 USD</span></div>
+                <div class="status-badge" style="color: #38bdf8;"><span>CAPITAL BASE: $50.00 USD</span></div>
             </div>
         </div>
     </div>
@@ -1108,7 +1104,7 @@ render_html(f"""
     <div class="kpi-card">
         <div class="kpi-label"><span>PnL Neto Acumulado</span></div>
         <div class="kpi-value" style="color: {'#10b981' if total_pnl_usd >= 0 else '#f43f5e'};">${total_pnl_usd:,.2f}</div>
-        <div class="kpi-subtext"><span>{total_pnl_pct:.2f}% s/ $39.96</span></div>
+        <div class="kpi-subtext"><span>{total_pnl_pct:.2f}% s/ $50.00</span></div>
     </div>
     <div class="kpi-card">
         <div class="kpi-label"><span>Posiciones Activas</span></div>
@@ -1123,43 +1119,189 @@ render_html(f"""
 </div>
 """)
 
-# Matriz de los 3 Pares VIP en pantalla
-render_html("""
-<div class="section-header">
-    <div class="section-title"><span style="color: #10b981;">📡</span><span>Matriz Cuantitativa en Tiempo Real (Pares VIP: BTC, ETH, SOL)</span></div>
-</div>
-""")
+# Pestañas principales restauradas
+tab_matriz, tab_auditoria = st.tabs([
+    "📊 Matriz Cuantitativa (3 Pares VIP) & Posiciones Activas",
+    "📜 Historial, Auditoría & Consola de Logs"
+])
 
-matrix_rows = []
-for sym in PAIRS:
-    data_pair = analyze_pair_confluence_4h(sym)
-    is_signal = data_pair.get("signal", False)
-    price_val = data_pair.get("price", 0.0)
-    ema_val = data_pair.get("ema200", 0.0)
-    rsi_val = data_pair.get("rsi", 50.0)
-    vol_ratio = data_pair.get("vol_ratio", 1.0)
+with tab_matriz:
+    # SECCIÓN A: POSICIONES ABIERTAS
+    render_html("""
+    <div class="section-header">
+        <div class="section-title">
+            <span style="color: #38bdf8;">💼</span>
+            <span>Posiciones Activas en Cartera (VIP)</span>
+        </div>
+        <div class="section-tag">GESTIÓN EN VIVO</div>
+    </div>
+    """)
 
-    if is_signal and not READ_ONLY and price_val > 0:
-        register_long_position(sym, price_val, data_pair)
+    if df_open.empty:
+        render_html("""
+        <div style="background-color: #080d14; border: 1px dashed rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 20px; text-align: center; color: #64748b; font-size: 11px; font-family: 'JetBrains Mono'; margin-bottom: 22px;">
+            SIN POSICIONES ACTIVAS. EL MOTOR VIGILA CONTINUAMENTE BTC/USD, ETH/USD Y SOL/USD.
+        </div>
+        """)
+    else:
+        rows_open = []
+        for _, row in df_open.iterrows():
+            oid = str(row.get('order_id', '-'))
+            sym = str(row.get('symbol', '-'))
+            entry_p = float(row.get('entry_price', 1.0))
+            cur_p = float(row.get('current_price', get_current_asset_price(sym)))
+            sl_p = float(row.get('sl', entry_p * (1.0 - STOP_LOSS_PCT)))
+            tp_p = float(row.get('tp', entry_p * (1.0 + TAKE_PROFIT_PCT)))
+            f_usd = float(row.get('pnl_float_usd', 0.0))
+            f_pct = float(row.get('pnl_float_pct', 0.0))
 
-    row_cls = "row-signal-active" if is_signal else ""
-    badge_sig = "<span class=\"badge-tag badge-signal-true\">● TRUE (LONG)</span>" if is_signal else "<span class=\"badge-tag badge-signal-false\">● FALSE</span>"
+            pnl_color = "#10b981" if f_usd >= 0 else "#f43f5e"
+            pnl_str = f"+${f_usd:,.2f}" if f_usd >= 0 else f"-${abs(f_usd):,.2f}"
+            trailing_status = "BE ASEGURADO" if bool(row.get('trailing_be', False)) else "EN TRAYECTORIA"
 
-    matrix_rows.append(
-        f"<tr class=\"{row_cls}\">"
-        f"<td><span style=\"color: #f8fafc; font-weight: 700;\">{sym}</span></td>"
-        f"<td style=\"color: #38bdf8;\">${price_val:,.2f}</td>"
-        f"<td>${ema_val:,.2f}</td>"
-        f"<td>{rsi_val:.1f}</td>"
-        f"<td>{vol_ratio:.2f}x</td>"
-        f"<td>{badge_sig}</td>"
-        f"</tr>"
+            rows_open.append(
+                f"<tr>"
+                f"<td><span style=\"color: #f8fafc; font-weight: 700;\">{oid}</span></td>"
+                f"<td><span style=\"color: #38bdf8; font-weight: 700;\">{sym}</span></td>"
+                f"<td><span class=\"badge-tag badge-signal-true\">LONG</span></td>"
+                f"<td>${entry_p:,.2f}</td>"
+                f"<td style=\"font-weight: 700; color: #f8fafc;\">${cur_p:,.2f}</td>"
+                f"<td style=\"color: #f43f5e;\">${sl_p:,.2f} (-1.5%)</td>"
+                f"<td style=\"color: #10b981;\">${tp_p:,.2f} (+2.0%)</td>"
+                f"<td style=\"color: {pnl_color}; font-weight: 700;\">{pnl_str} ({f_pct:+.2f}%)</td>"
+                f"<td><span class=\"badge-tag {'badge-signal-true' if row.get('trailing_be') else 'badge-signal-false'}\">{trailing_status}</span></td>"
+                f"</tr>"
+            )
+
+        table_open_html = (
+            "<div class=\"table-container\">"
+            "<table class=\"quant-table\">"
+            "<thead><tr>"
+            "<th>ID Orden</th><th>Símbolo</th><th>Lado</th><th>Entrada Real</th>"
+            "<th>Precio Kraken</th><th>Stop Loss</th><th>Take Profit</th>"
+            "<th>PnL Flotante ($ / %)</th><th>Estado Trailing</th>"
+            "</tr></thead>"
+            "<tbody>" + "".join(rows_open) + "</tbody></table></div>"
+        )
+        render_html(table_open_html)
+
+    # SECCIÓN B: MATRIZ CUANTITATIVA EN TIEMPO REAL
+    render_html("""
+    <div class="section-header" style="margin-top: 18px;">
+        <div class="section-title"><span style="color: #10b981;">📡</span><span>Matriz Cuantitativa en Tiempo Real (Pares VIP: BTC, ETH, SOL)</span></div>
+        <div class="section-tag">ANÁLISIS 4H ESTRICTO</div>
+    </div>
+    """)
+
+    matrix_rows = []
+    for sym in PAIRS:
+        data_pair = analyze_pair_confluence_4h(sym)
+        is_signal = data_pair.get("signal", False)
+        price_val = data_pair.get("price", 0.0)
+        ema_val = data_pair.get("ema200", 0.0)
+        rsi_val = data_pair.get("rsi", 50.0)
+        vol_ratio = data_pair.get("vol_ratio", 1.0)
+
+        if is_signal and not READ_ONLY and price_val > 0:
+            register_long_position(sym, price_val, data_pair)
+
+        row_cls = "row-signal-active" if is_signal else ""
+        badge_sig = "<span class=\"badge-tag badge-signal-true\">● TRUE (LONG)</span>" if is_signal else "<span class=\"badge-tag badge-signal-false\">● FALSE</span>"
+
+        matrix_rows.append(
+            f"<tr class=\"{row_cls}\">"
+            f"<td><span style=\"color: #f8fafc; font-weight: 700;\">{sym}</span></td>"
+            f"<td style=\"color: #38bdf8;\">${price_val:,.2f}</td>"
+            f"<td>${ema_val:,.2f}</td>"
+            f"<td>{rsi_val:.1f}</td>"
+            f"<td>{vol_ratio:.2f}x</td>"
+            f"<td>{badge_sig}</td>"
+            f"</tr>"
+        )
+
+    render_html(
+        "<div class=\"table-container\"><table class=\"quant-table\">"
+        "<thead><tr><th>Par VIP</th><th>Precio 4H</th><th>EMA 200 (4H)</th><th>RSI (14)</th><th>Vol Ratio</th><th>Señal Confluencia</th></tr></thead>"
+        "<tbody>" + "".join(matrix_rows) + "</tbody></table></div>"
     )
 
-render_html(
-    "<div class=\"table-container\"><table class=\"quant-table\">"
-    "<thead><tr><th>Par VIP</th><th>Precio 4H</th><th>EMA 200 (4H)</th><th>RSI (14)</th><th>Vol Ratio</th><th>Señal Confluencia</th></tr></thead>"
-    "<tbody>" + "".join(matrix_rows) + "</tbody></table></div>"
-)
+with tab_auditoria:
+    render_html("""
+    <div class="section-header">
+        <div class="section-title">
+            <span style="color: #38bdf8;">📜</span>
+            <span>Historial de Órdenes Cerradas (Supabase / Memoria)</span>
+        </div>
+        <div class="section-tag">AUDITORÍA CUANTITATIVA</div>
+    </div>
+    """)
+
+    if df_closed.empty:
+        render_html("""
+        <div style="background-color: #080d14; border: 1px dashed rgba(56, 189, 248, 0.2); border-radius: 8px; padding: 28px 20px; text-align: center; color: #64748b; font-size: 11px; font-family: 'JetBrains Mono'; margin-bottom: 20px;">
+            SIN ÓRDENES CERRADAS TODAVÍA. LAS OPERACIONES SE REGISTRARÁN AL TOCAR TP (+2.0%) O SL (-1.5%).
+        </div>
+        """)
+    else:
+        rows_closed = []
+        for _, row in df_closed.iterrows():
+            oid = str(row.get('order_id', '-'))
+            sym = str(row.get('symbol', '-'))
+            entry_p = float(row.get('entry_price', 1.0))
+            exit_p = float(row.get('exit_price', entry_p))
+            pnl_val = float(row.get('pnl_usd', 0.0))
+            pnl_pct = float(row.get('pnl_pct', 0.0))
+            reason = str(row.get('exit_reason', 'CIERRE'))
+            is_win = pnl_val >= 0
+
+            pnl_color = "#10b981" if is_win else "#f43f5e"
+            pnl_str = f"+${pnl_val:,.2f}" if is_win else f"-${abs(pnl_val):,.2f}"
+            badge_r = f"<span class=\"badge-tag {'badge-signal-true' if is_win else 'badge-signal-false'}\">{reason}</span>"
+
+            closed_str = str(row.get('closed_at', row.get('created_at', '')))
+            try:
+                dt_cls = datetime.datetime.fromisoformat(closed_str.replace("Z", "+00:00")).astimezone(TZ_COT)
+                hora_close = dt_cls.strftime("%Y-%m-%d %H:%M:%S COT")
+            except Exception:
+                hora_close = closed_str[:19] if len(closed_str) >= 19 else "-"
+
+            rows_closed.append(
+                f"<tr>"
+                f"<td><span style=\"color: #f8fafc; font-weight: 700;\">{oid}</span></td>"
+                f"<td><span style=\"color: #38bdf8; font-weight: 700;\">{sym}</span></td>"
+                f"<td>${entry_p:,.2f}</td>"
+                f"<td>${exit_p:,.2f}</td>"
+                f"<td>{badge_r}</td>"
+                f"<td style=\"color: {pnl_color}; font-weight: 700;\">{pnl_str}</td>"
+                f"<td style=\"color: {pnl_color}; font-weight: 700;\">{pnl_pct:+.2f}%</td>"
+                f"<td style=\"color: #94a3b8;\">{hora_close}</td>"
+                f"</tr>"
+            )
+
+        table_closed_html = (
+            "<div class=\"table-container\">"
+            "<table class=\"quant-table\">"
+            "<thead><tr>"
+            "<th>ID Orden</th><th>Símbolo</th><th>Entrada</th><th>Salida Real</th>"
+            "<th>Motivo Cierre</th><th>PnL Real ($)</th><th>Retorno (%)</th><th>Fecha/Hora (COT)</th>"
+            "</tr></thead>"
+            "<tbody>" + "".join(rows_closed) + "</tbody></table></div>"
+        )
+        render_html(table_closed_html)
+
+    # Consola de Eventos y Logs
+    render_html("""
+    <div class="section-header" style="margin-top: 14px;">
+        <div class="section-title">
+            <span style="color: #38bdf8;">🖥️</span>
+            <span>Consola de Auditoría y Eventos del Sistema (Terminal Logs)</span>
+        </div>
+        <div class="section-tag">STREAM EN VIVO</div>
+    </div>
+    """)
+
+    current_logs = st.session_state.get("logs", _GLOBAL_SYSTEM_LOGS)
+    logs_html = "".join([f"<div class=\"log-line\">{l}</div>" for l in current_logs])
+    render_html(f"<div class=\"terminal-console\">{logs_html}</div>")
 
 gc.collect()
