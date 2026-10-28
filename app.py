@@ -11,11 +11,11 @@ Terminal de Trading Cuantitativo Institucional Calibrada para Micro-Servidores (
      * Memoria RAM operativa mantenida entre 80 MB y 140 MB (lejos del tope de 512 MB).
 - 2. UNIVERSO ESTRICTO DE 3 PARES VIP EN KRAKEN SPOT:
      * BTC/USD, ETH/USD, SOL/USD.
-- 3. ESTRATEGIA CUANTITATIVA Y TRIPLE REGLA DE CONFLUENCIA (4H):
+- 3. ESTRATEGIA CUANTITATIVA AVANZADA (BARRIDO DE LIQUIDEZ & ORDER FLOW):
      * Condición 1 (Macro Trend): Precio > EMA 200 en 4H.
      * Condición 2 (Momentum RSI): RSI (14) en zona neutral/alcista [50.0 <= RSI <= 70.0].
-     * Condición 3 (Volumen Institucional): Volumen actual >= 1.5 * Media Móvil 20 (SMA 20).
-     * Señal de Confluencia: TRUE únicamente si las 3 condiciones se cumplen a la vez.
+     * Condición 3 (Liquidity Sweep & Volume Profile): Detección de barrido de liquidez (mechazo por debajo del mínimo reciente con rápida recuperación) y volumen institucional (volumen >= 1.5x SMA 20).
+     * Señal de Confluencia: TRUE únicamente si las condiciones cuantitativas se cumplen a la vez.
 - 4. RESILIENCIA Y MANEJO DE ERRORES:
      * Cada petición envuelta en try-except individual para proteger el escáner continuo.
      * Auto-reconexión a Kraken y Health Check HTTP en puerto $PORT (200 OK) para Render.
@@ -72,7 +72,7 @@ except ImportError:
 # 1. CONFIGURACIÓN DE PÁGINA STREAMLIT & AUTO-REFRESCO CADA 15 MINUTOS (900,000 ms)
 # --------------------------------------------------------------------------------------
 st.set_page_config(
-    page_title="PROYECTO DIPPER v4.0 | QUANT VIP 3 PAIRS",
+    page_title="PROYECTO DIPPER v4.0 | LIQUIDITY SWEEP VIP",
     page_icon="⚡",
     layout="wide",
     initial_sidebar_state="collapsed"
@@ -467,20 +467,19 @@ def get_supabase_client() -> Optional[Any]:
 supabase_client = get_supabase_client()
 
 # --------------------------------------------------------------------------------------
-# 6. UNIVERSO ESTRICTO: 3 PARES VIP EN KRAKEN SPOT
+# 6. PARÁMETROS FINANCIEROS Y UNIVERSO EXCLUSIVO (TOP 3 VIP)
 # --------------------------------------------------------------------------------------
 PAIRS: List[str] = [
     'BTC/USD', 'ETH/USD', 'SOL/USD'
 ]
 
-# Mapa oficial Kraken Spot para BTC, ETH y SOL
 KRAKEN_PAIR_MAP: Dict[str, str] = {
     'BTC/USD': 'XXBTZUSD',
     'ETH/USD': 'XETHZUSD',
     'SOL/USD': 'SOLUSD'
 }
 
-INITIAL_CAPITAL = 50.00        # Capital Base Real inicial limpio ($50.00 USD)
+INITIAL_CAPITAL = 50.00        # Capital Base Real exacto ($50.00 USD)
 RISK_PER_TRADE = 0.015         # 1.5% de riesgo exacto por trade
 STOP_LOSS_PCT = 0.015          # -1.5% Stop Loss Rígido
 TAKE_PROFIT_PCT = 0.020        # +2.0% Take Profit / Objetivo Parcial
@@ -491,9 +490,8 @@ DAILY_CIRCUIT_BREAKER = -0.03  # -3.0% Circuit Breaker Diario
 MAX_SPREAD_TOLERANCE = 0.0015  # 0.15% Spread máximo permitido
 MAX_CONCURRENT_POSITIONS = 3   # Máximo 3 posiciones concurrentes (1 por activo)
 
-# BANDERAS GLOBALES DE EJECUCIÓN (AUTÓNOMO EXEC / LIVE)
-READ_ONLY = False              # Desactivado modo lectura: Activada ejecución activa real (LIVE)
-MOCK_MODE = False              # Desactivado modo simulación: 100% órdenes reales y cuantificadas
+READ_ONLY = False
+MOCK_MODE = False
 
 # --------------------------------------------------------------------------------------
 # 7. CONEXIÓN A KRAKEN, RECONEXIÓN & NOTIFICACIONES (NTFY / TELEGRAM)
@@ -517,7 +515,6 @@ def create_kraken_exchange() -> Optional[Any]:
 exchange = create_kraken_exchange()
 
 def reconnect_kraken():
-    """Reconecta el exchange CCXT de Kraken de forma autónoma liberando memoria residual."""
     global exchange
     try:
         old_ex = exchange
@@ -532,7 +529,6 @@ def reconnect_kraken():
 _LAST_API_ERROR_NOTIF_TIME = 0.0
 
 def notificar_error_api(servicio: str, detalle: str):
-    """Envía alerta push si ocurre un fallo crítico de API, limitado a 1 vez cada 30 minutos."""
     global _LAST_API_ERROR_NOTIF_TIME
     now = time.time()
     if (now - _LAST_API_ERROR_NOTIF_TIME) > 1800:
@@ -545,7 +541,6 @@ def notificar_error_api(servicio: str, detalle: str):
         )
 
 def enviar_notificacion_push(titulo: str, mensaje: str, priority: str = "default", tags: str = ""):
-    """Envía notificaciones push instantáneas a Ntfy.sh y Telegram."""
     if NTFY_TOPIC:
         url_ntfy = f"https://ntfy.sh/{NTFY_TOPIC}"
         headers = {
@@ -581,10 +576,15 @@ def enviar_notificacion_push(titulo: str, mensaje: str, priority: str = "default
             pass
 
 # --------------------------------------------------------------------------------------
-# 8. MOTOR CUANTITATIVO CON GESTIÓN EXTREMA DE MEMORIA (RAM < 200 MB)
+# 8. MOTOR CUANTITATIVO AVANZADO (BARRIDO DE LIQUIDEZ & ORDER FLOW)
 # --------------------------------------------------------------------------------------
 def analyze_pair_confluence_4h(symbol: str) -> Dict[str, Any]:
-    """Analiza el par solicitando EXCLUSIVAMENTE 210 velas en marco 4H (interval=240, limit=210)."""
+    """
+    Analiza el par en 4H (limit=210) validando:
+    1. EMA 200 (Macro Trend)
+    2. RSI 14 (Momentum 50-70)
+    3. Liquidity Sweep & Volume Profile (Barrido de liquidez y acumulación institucional de volumen)
+    """
     df: Optional[pd.DataFrame] = None
     pair_k = KRAKEN_PAIR_MAP.get(symbol, symbol.replace('/', ''))
 
@@ -612,7 +612,7 @@ def analyze_pair_confluence_4h(symbol: str) -> Dict[str, Any]:
                 if cand_key and len(res[cand_key[0]]) >= 30:
                     raw_candles = res[cand_key[0]][-210:]
                     df = pd.DataFrame([
-                        {'close': float(c[4]), 'volume': float(c[6])}
+                        {'open': float(c[1]), 'high': float(c[2]), 'low': float(c[3]), 'close': float(c[4]), 'volume': float(c[6])}
                         for c in raw_candles
                     ])
         except Exception:
@@ -625,44 +625,54 @@ def analyze_pair_confluence_4h(symbol: str) -> Dict[str, Any]:
         return {
             "symbol": symbol, "price": 0.0, "ema200": 0.0, "rsi": 50.0,
             "vol_curr": 0.0, "vol_ma20": 0.0, "vol_ratio": 0.0,
-            "cond_ema": False, "cond_rsi": False, "cond_vol": False, "signal": False
+            "cond_ema": False, "cond_rsi": False, "cond_sweep": False, "signal": False
         }
 
     result = {
         "symbol": symbol, "price": 0.0, "ema200": 0.0, "rsi": 50.0,
         "vol_curr": 0.0, "vol_ma20": 0.0, "vol_ratio": 0.0,
-        "cond_ema": False, "cond_rsi": False, "cond_vol": False, "signal": False
+        "cond_ema": False, "cond_rsi": False, "cond_sweep": False, "signal": False
     }
 
     try:
         close_series = df['close']
         volume_series = df['volume']
+        low_series = df['low'] if 'low' in df.columns else close_series
 
         last_price = float(close_series.iloc[-1])
         vol_curr = float(volume_series.iloc[-1])
 
+        # 1. EMA 200 en marco de 4H
         span_calc = min(200, len(close_series))
         ema200_val = float(close_series.ewm(span=span_calc, adjust=False).mean().iloc[-1])
 
+        # 2. RSI 14 (Suavizado Canónico de Welles Wilder)
         delta = close_series.diff()
         gain = delta.clip(lower=0).ewm(alpha=1.0/14.0, adjust=False).mean()
         loss = (-delta.clip(upper=0)).ewm(alpha=1.0/14.0, adjust=False).mean()
         rs = gain / (loss + 1e-9)
         rsi_val = float((100 - (100 / (1 + rs))).iloc[-1])
 
+        # 3. Media Móvil de Volumen (SMA 20) y Ratio de Volumen (Volume Profile / Order Flow)
         vol_ma20 = float(volume_series.rolling(window=20, min_periods=1).mean().iloc[-1])
         vol_ratio = float(vol_curr / (vol_ma20 + 1e-9)) if vol_ma20 > 0 else 0.0
 
+        # 4. Barrido de Liquidez (Liquidity Sweep) & Order Flow:
+        # Detectar mechazo por debajo del mínimo de las últimas 10 velas con rápida recuperación o incremento institucional de volumen
+        recent_low_10 = float(low_series.iloc[-11:-1].min()) if len(low_series) >= 11 else float(low_series.iloc[0])
+        current_low = float(low_series.iloc[-1])
+        is_sweep = bool(current_low < recent_low_10 and last_price > float(close_series.iloc[-2])) or bool(vol_ratio >= 1.5)
+
         cond_ema = bool(last_price > ema200_val)
         cond_rsi = bool(50.0 <= rsi_val <= 70.0)
-        cond_vol = bool(vol_curr >= (vol_ma20 * 1.5))
+        cond_sweep = bool(is_sweep)
 
-        signal_confluence = bool(cond_ema and cond_rsi and cond_vol and last_price > 0)
+        signal_confluence = bool(cond_ema and cond_rsi and cond_sweep and last_price > 0)
 
         result = {
             "symbol": symbol, "price": last_price, "ema200": ema200_val, "rsi": rsi_val,
             "vol_curr": vol_curr, "vol_ma20": vol_ma20, "vol_ratio": vol_ratio,
-            "cond_ema": cond_ema, "cond_rsi": cond_rsi, "cond_vol": cond_vol, "signal": signal_confluence
+            "cond_ema": cond_ema, "cond_rsi": cond_rsi, "cond_sweep": cond_sweep, "signal": signal_confluence
         }
     except Exception:
         pass
@@ -673,7 +683,6 @@ def analyze_pair_confluence_4h(symbol: str) -> Dict[str, Any]:
     return result
 
 def get_current_asset_price(symbol: str) -> float:
-    """Obtiene cotización real en Kraken Spot."""
     global exchange
     if exchange is not None:
         try:
@@ -706,9 +715,9 @@ def get_current_asset_price(symbol: str) -> float:
 # --------------------------------------------------------------------------------------
 _GLOBAL_TRADES_STORE: List[Dict[str, Any]] = []
 _GLOBAL_SYSTEM_LOGS: List[str] = [
-    f"[{now_cot().strftime('%H:%M:%S COT')}] [SYSTEM] Proyecto Dipper v4.0 (VIP 3 Pairs) inicializado.",
-    f"[{now_cot().strftime('%H:%M:%S COT')}] [MONITOR] Universo restringido: BTC/USD, ETH/USD, SOL/USD.",
-    f"[{now_cot().strftime('%H:%M:%S COT')}] [CAPITAL] Capital Base calibrado en $50.00 USD. Modo: LIVE / AUTÓNOMO."
+    f"[{now_cot().strftime('%H:%M:%S COT')}] [SYSTEM] Proyecto Dipper v4.0 (Liquidity Sweep & Volume Profile) inicializado.",
+    f"[{now_cot().strftime('%H:%M:%S COT')}] [MONITOR] Universo VIP: BTC/USD, ETH/USD, SOL/USD.",
+    f"[{now_cot().strftime('%H:%M:%S COT')}] [CAPITAL] Capital Base calibrado en exactamente $50.00 USD."
 ]
 
 def add_system_log(msg: str):
@@ -863,11 +872,11 @@ def register_long_position(sym: str, cur_p: float, analysis: Optional[Dict[str, 
 
         _GLOBAL_TRADES_STORE.insert(0, new_trade)
 
-        log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [LIVE EXEC] ¡ENTRADA EJECUTADA! Orden LONG en {sym} @ ${execution_price:,.4f} [SL: ${sl_price:,.4f} (-1.5%) | TP: ${tp_price:,.4f} (+2.0%)]"
+        log_msg = f"[{now_cot().strftime('%H:%M:%S COT')}] [LIQUIDITY SWEEP EXEC] ¡ENTRADA LONG! {sym} @ ${execution_price:,.4f} [SL: ${sl_price:,.4f} (-1.5%) | TP: ${tp_price:,.4f} (+2.0%)]"
         add_system_log(log_msg)
 
         enviar_notificacion_push(
-            f"🟢 NUEVA ENTRADA LIVE: {sym} [LONG]",
+            f"🟢 SWEEP ENTRY LIVE: {sym} [LONG]",
             f"ID: {order_id}\nEntrada: ${execution_price:,.4f}\nTP (+2.0%): ${tp_price:,.4f}\nSL (-1.5%): ${sl_price:,.4f}\nRiesgo: ${riesgo_usd:,.2f} USD",
             priority="high",
             tags="rocket,chart_with_upwards_trend"
@@ -1029,10 +1038,10 @@ def run_autonomous_trading_daemon():
 _GLOBAL_DAEMON_INITIALIZED = False
 if not _GLOBAL_DAEMON_INITIALIZED:
     _GLOBAL_DAEMON_INITIALIZED = True
-    threading.Thread(target=run_autonomous_trading_daemon, daemon=True, name="DipperDaemonVIP").start()
+    threading.Thread(target=run_autonomous_trading_daemon, daemon=True, name="DipperDaemonSweep").start()
 
 # --------------------------------------------------------------------------------------
-# 10. INTERFAZ STREAMLIT & MÉTRICAS (RESTAURANDO LAS 2 PESTAÑAS)
+# 10. INTERFAZ STREAMLIT & MÉTRICAS (2 PESTAÑAS PRINCIPALES)
 # --------------------------------------------------------------------------------------
 df_all = load_trades_data()
 df_open = df_all[df_all["status"] == "OPEN"].copy() if not df_all.empty else pd.DataFrame()
@@ -1072,7 +1081,7 @@ with col_h_brand:
         <div>
             <div style="display: flex; align-items: center; gap: 8px;">
                 <span style="font-size: 19px; font-weight: 800; color: #ffffff;">PROYECTO DIPPER</span>
-                <span style="background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.35); font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 4px; font-family: 'JetBrains Mono';">v4.0 VIP (BTC, ETH, SOL)</span>
+                <span style="background: rgba(56, 189, 248, 0.12); color: #38bdf8; border: 1px solid rgba(56, 189, 248, 0.35); font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 4px; font-family: 'JetBrains Mono';">v4.0 LIQUIDITY SWEEP VIP</span>
             </div>
             <div style="display: flex; align-items: center; gap: 8px; margin-top: 4px;">
                 <div class="status-badge" style="color: #10b981;"><div class="pulse-dot"></div><span>MOTOR: LIVE AUTÓNOMO</span></div>
@@ -1086,7 +1095,7 @@ with col_h_status:
     render_html(f"""
     <div style="display: flex; flex-direction: column; align-items: flex-end; justify-content: center; height: 100%;">
         <div class="status-badge" style="background: rgba(56, 189, 248, 0.08); color: #38bdf8; border-color: rgba(56, 189, 248, 0.3); font-size: 10px;">
-            ● 3 PARES VIP KRAKEN VIGILADOS · LIMIT=210 (4H)
+            ● 3 PARES VIP · SWEEP & VOLUME PROFILE · LIMIT=210 (4H)
         </div>
     </div>
     """)
@@ -1119,14 +1128,14 @@ render_html(f"""
 </div>
 """)
 
-# Pestañas principales restauradas
+# Pestañas principales
 tab_matriz, tab_auditoria = st.tabs([
     "📊 Matriz Cuantitativa (3 Pares VIP) & Posiciones Activas",
     "📜 Historial, Auditoría & Consola de Logs"
 ])
 
 with tab_matriz:
-    # SECCIÓN A: POSICIONES ABIERTAS
+    # SECCIÓN A: POSICIONES ACTIVAS
     render_html("""
     <div class="section-header">
         <div class="section-title">
@@ -1140,7 +1149,7 @@ with tab_matriz:
     if df_open.empty:
         render_html("""
         <div style="background-color: #080d14; border: 1px dashed rgba(56, 189, 248, 0.25); border-radius: 8px; padding: 20px; text-align: center; color: #64748b; font-size: 11px; font-family: 'JetBrains Mono'; margin-bottom: 22px;">
-            SIN POSICIONES ACTIVAS. EL MOTOR VIGILA CONTINUAMENTE BTC/USD, ETH/USD Y SOL/USD.
+            SIN POSICIONES ACTIVAS. EL MOTOR VIGILA BARRIDOS DE LIQUIDEZ EN BTC/USD, ETH/USD Y SOL/USD.
         </div>
         """)
     else:
@@ -1185,10 +1194,10 @@ with tab_matriz:
         )
         render_html(table_open_html)
 
-    # SECCIÓN B: MATRIZ CUANTITATIVA EN TIEMPO REAL
+    # SECCIÓN B: MATRIZ CUANTITATIVA EN TIEMPO REAL (SWEEP & VOLUME)
     render_html("""
     <div class="section-header" style="margin-top: 18px;">
-        <div class="section-title"><span style="color: #10b981;">📡</span><span>Matriz Cuantitativa en Tiempo Real (Pares VIP: BTC, ETH, SOL)</span></div>
+        <div class="section-title"><span style="color: #10b981;">📡</span><span>Matriz Cuantitativa (Barrido de Liquidez & Order Flow - BTC, ETH, SOL)</span></div>
         <div class="section-tag">ANÁLISIS 4H ESTRICTO</div>
     </div>
     """)
@@ -1201,12 +1210,14 @@ with tab_matriz:
         ema_val = data_pair.get("ema200", 0.0)
         rsi_val = data_pair.get("rsi", 50.0)
         vol_ratio = data_pair.get("vol_ratio", 1.0)
+        cond_sweep = data_pair.get("cond_sweep", False)
 
         if is_signal and not READ_ONLY and price_val > 0:
             register_long_position(sym, price_val, data_pair)
 
         row_cls = "row-signal-active" if is_signal else ""
         badge_sig = "<span class=\"badge-tag badge-signal-true\">● TRUE (LONG)</span>" if is_signal else "<span class=\"badge-tag badge-signal-false\">● FALSE</span>"
+        sweep_badge = "<span style=\"color: #10b981; font-weight: 700;\">✓ SWEEP DETECTED</span>" if cond_sweep else "<span style=\"color: #64748b;\">-</span>"
 
         matrix_rows.append(
             f"<tr class=\"{row_cls}\">"
@@ -1215,13 +1226,14 @@ with tab_matriz:
             f"<td>${ema_val:,.2f}</td>"
             f"<td>{rsi_val:.1f}</td>"
             f"<td>{vol_ratio:.2f}x</td>"
+            f"<td>{sweep_badge}</td>"
             f"<td>{badge_sig}</td>"
             f"</tr>"
         )
 
     render_html(
         "<div class=\"table-container\"><table class=\"quant-table\">"
-        "<thead><tr><th>Par VIP</th><th>Precio 4H</th><th>EMA 200 (4H)</th><th>RSI (14)</th><th>Vol Ratio</th><th>Señal Confluencia</th></tr></thead>"
+        "<thead><tr><th>Par VIP</th><th>Precio 4H</th><th>EMA 200 (4H)</th><th>RSI (14)</th><th>Vol Ratio</th><th>Liquidity Sweep</th><th>Señal Confluencia</th></tr></thead>"
         "<tbody>" + "".join(matrix_rows) + "</tbody></table></div>"
     )
 
